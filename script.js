@@ -734,6 +734,8 @@ adminLogoutBtn.addEventListener('click', async function () {
     document.getElementById('lockedFieldsNote').style.display = locked ? 'block' : 'none';
   }
 
+  var editingId = null;
+  
   function resetProductForm() {
     editingId = null;
     document.getElementById('pName').value = '';
