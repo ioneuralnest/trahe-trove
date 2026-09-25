@@ -814,7 +814,7 @@ adminLogoutBtn.addEventListener('click', async function () {
   try {
     var uploadResult = await supabaseClient
       .storage
-      .from('product-images')
+      .from('product images')
       .upload(filePath, file, {
         contentType: file.type,
         upsert: false
