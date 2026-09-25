@@ -835,7 +835,7 @@ adminLogoutBtn.addEventListener('click', async function () {
 
   } catch (error) {
     console.error('Product image upload error:', error);
-    errEl.textContent = 'Image upload failed. Please try again.';
+    errEl.textContent = 'Image upload failed: ' + uploadResult.error.message;
   }
 
 } else {
