@@ -280,39 +280,92 @@ supabaseClient.auth.getSession().then(function (result) {
     });
   }
 
-  function handleProofUpload(inputId, type, label) {
-    var input = document.getElementById(inputId);
-    if (!input) return;
-    input.addEventListener('change', function () {
-      var files = Array.prototype.slice.call(input.files || []);
-      if (!files.length) return;
-      var remaining = files.length;
-      files.forEach(function (file) {
-        if (!file.type.startsWith('image/')) { remaining--; return; }
-        var reader = new FileReader();
-        reader.onload = function (e) {
-          var uploadedAt = Date.now();
-          var expiresAt = null;
-          if (type === 'waybills') {
-            var deleteDate = getWaybillDeleteDate();
-            expiresAt = localDateTimeEnd(deleteDate);
-            if (!expiresAt || expiresAt <= uploadedAt) {
-              showToast('Please choose a future Waybill auto-delete date.');
-              remaining--;
-              if (remaining === 0) input.value = '';
-              return;
-            }
-            try { localStorage.setItem(WAYBILL_DELETE_DATE_KEY, deleteDate); } catch (err) {}
-          }
-          proofState[type].unshift({ image: e.target.result, caption: label + ' • ' + file.name, uploadedAt: uploadedAt, expiresAt: expiresAt });
-          remaining--;
-          if (remaining === 0) { saveProof(); renderProof(); input.value = ''; }
-        };
-        reader.onerror = function () { remaining--; if (remaining === 0) input.value = ''; };
-        reader.readAsDataURL(file);
-      });
-    });
-  }
+  async function handleProofUpload(inputId, type, label) {
+  var input = document.getElementById(inputId);
+  if (!input) return;
+
+  input.addEventListener('change', async function () {
+    var files = Array.prototype.slice.call(input.files || []);
+    if (!files.length) return;
+
+    for (var i = 0; i < files.length; i++) {
+      var file = files[i];
+
+      if (!file.type.startsWith('image/')) {
+        continue;
+      }
+
+      var uploadedAt = Date.now();
+      var expiresAt = null;
+
+      if (type === 'waybills') {
+        var deleteDate = getWaybillDeleteDate();
+        expiresAt = localDateTimeEnd(deleteDate);
+
+        if (!expiresAt || expiresAt <= uploadedAt) {
+          showToast('Please choose a future Waybill auto-delete date.');
+          continue;
+        }
+
+        try {
+          localStorage.setItem(WAYBILL_DELETE_DATE_KEY, deleteDate);
+        } catch (err) {}
+      }
+
+      try {
+        var filePath =
+          'proofs/' +
+          crypto.randomUUID() +
+          '-' +
+          file.name;
+
+        var uploadResult = await supabaseClient
+          .storage
+          .from('legitimacy proofs')
+          .upload(filePath, file, {
+            contentType: file.type,
+            upsert: false
+          });
+
+        if (uploadResult.error) {
+          console.error(
+            'Proof image upload failed:',
+            uploadResult.error
+          );
+          showToast(
+            'Proof image upload failed: ' +
+            uploadResult.error.message
+          );
+          continue;
+        }
+
+        var publicUrlResult = supabaseClient
+          .storage
+          .from('legitimacy proofs')
+          .getPublicUrl(filePath);
+
+        var publicUrl = publicUrlResult.data.publicUrl;
+
+        proofState[type].unshift({
+          image: publicUrl,
+          caption: label + ' • ' + file.name,
+          uploadedAt: uploadedAt,
+          expiresAt: expiresAt
+        });
+
+      } catch (error) {
+        console.error('Proof image upload error:', error);
+        showToast(
+          'Proof image upload failed: ' + error.message
+        );
+      }
+    }
+
+    saveProof();
+    renderProof();
+    input.value = '';
+  });
+}
 
   function peso(n) { return '₱' + Number(n || 0).toLocaleString('en-PH'); }
 
