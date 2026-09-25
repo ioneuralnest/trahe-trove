@@ -436,63 +436,154 @@ supabaseClient.auth.getSession().then(function (result) {
   // machine. Phase 2 replaces this whole block with real server-side
   // auth (e.g. Supabase Auth) that a public visitor cannot bypass.
   // ------------------------------------------------------------
-  var DEV_ADMIN_USERNAME = 'admin';
-  var DEV_ADMIN_PASSWORD = 'admin';
-  var ADMIN_SESSION_KEY = 'trahe_trove_admin_session_DEV_ONLY';
+  var ADMIN_EMAIL = 'ioneuralnest@gmail.com';
 
-  var adminLoginScreen = document.getElementById('adminLoginScreen');
-  var adminDashboard = document.getElementById('adminDashboard');
-  var editingId = null;
+var adminLoginScreen = document.getElementById('adminLoginScreen');
+var adminDashboard = document.getElementById('adminDashboard');
+var adminLoginBack = document.getElementById('adminLoginBack');
+var adminLoginSubmit = document.getElementById('adminLoginSubmit');
+var adminLogoutBtn = document.getElementById('adminLogoutBtn');
+var adminLoginErr = document.getElementById('adminLoginErr');
+var adminUserInput = document.getElementById('adminUserInput');
+var adminPassInput = document.getElementById('adminPassInput');
 
-  function showAdminLogin() {
-    document.getElementById('adminUserInput').value = '';
-    document.getElementById('adminPassInput').value = '';
-    document.getElementById('adminLoginErr').textContent = '';
-    adminDashboard.classList.remove('open');
-    adminLoginScreen.classList.add('open');
-    document.getElementById('adminUserInput').focus();
+function showAdminLogin() {
+  adminLoginScreen.classList.add('open');
+  adminDashboard.classList.remove('open');
+
+  adminLoginErr.textContent = '';
+  adminPassInput.value = '';
+}
+
+function showAdminDashboard() {
+  adminLoginScreen.classList.remove('open');
+  adminDashboard.classList.add('open');
+
+  adminLoginErr.textContent = '';
+
+  // Refresh the admin dashboard using the existing functions.
+  renderAll();
+}
+
+async function checkAdminSession() {
+  var result = await supabaseClient.auth.getSession();
+
+  if (result.error) {
+    console.error('Could not check Supabase session:', result.error);
+    return false;
   }
-  function showAdminDashboard() {
-    adminLoginScreen.classList.remove('open');
-    adminDashboard.classList.add('open');
-    document.getElementById('dropNameInput').value = state.dropName || '';
-    renderAll();
-  }
-  function closeAdminScreens() {
-    adminLoginScreen.classList.remove('open');
-    adminDashboard.classList.remove('open');
+
+  var session = result.data.session;
+
+  if (!session || !session.user) {
+    return false;
   }
 
-  document.getElementById('openAdminLogin').addEventListener('click', function () {
-    var alreadyIn = false;
-    try { alreadyIn = sessionStorage.getItem(ADMIN_SESSION_KEY) === '1'; } catch (e) { /* storage unavailable */ }
-    if (alreadyIn) { showAdminDashboard(); } else { showAdminLogin(); }
-  });
-  document.getElementById('adminLoginBack').addEventListener('click', closeAdminScreens);
+  var email = (session.user.email || '').toLowerCase().trim();
+  var allowedEmail = ADMIN_EMAIL.toLowerCase().trim();
 
-  document.getElementById('adminLoginSubmit').addEventListener('click', function () {
-    var user = document.getElementById('adminUserInput').value.trim();
-    var pass = document.getElementById('adminPassInput').value;
-    if (user === DEV_ADMIN_USERNAME && pass === DEV_ADMIN_PASSWORD) {
-      try { sessionStorage.setItem(ADMIN_SESSION_KEY, '1'); } catch (e) { /* ignore */ }
-      showAdminDashboard();
-    } else {
-      document.getElementById('adminLoginErr').textContent = 'Incorrect username or password.';
+  if (email !== allowedEmail) {
+    await supabaseClient.auth.signOut({ scope: 'local' });
+    return false;
+  }
+
+  return true;
+}
+
+
+/* Open Admin Login */
+
+document.getElementById('openAdminLogin').addEventListener('click', async function () {
+  var isAdmin = await checkAdminSession();
+
+  if (isAdmin) {
+    showAdminDashboard();
+  } else {
+    showAdminLogin();
+  }
+});
+
+
+/* Back to store */
+
+adminLoginBack.addEventListener('click', function () {
+  adminLoginScreen.classList.remove('open');
+  adminLoginErr.textContent = '';
+});
+
+
+/* Login */
+
+adminLoginSubmit.addEventListener('click', async function () {
+  var email = adminUserInput.value.trim().toLowerCase();
+  var password = adminPassInput.value;
+
+  adminLoginErr.textContent = '';
+
+  if (!email || !password) {
+    adminLoginErr.textContent = 'Please enter your email and password.';
+    return;
+  }
+
+  if (email !== ADMIN_EMAIL.toLowerCase().trim()) {
+    adminLoginErr.textContent = 'This account is not authorized for admin access.';
+    return;
+  }
+
+  adminLoginSubmit.disabled = true;
+  adminLoginSubmit.textContent = 'Logging in...';
+
+  try {
+    var result = await supabaseClient.auth.signInWithPassword({
+      email: email,
+      password: password
+    });
+
+    if (result.error) {
+      console.error('Supabase login failed:', result.error);
+      adminLoginErr.textContent = 'Incorrect email or password.';
+      return;
     }
+
+    showAdminDashboard();
+
+  } catch (error) {
+    console.error('Unexpected login error:', error);
+    adminLoginErr.textContent = 'Login failed. Please try again.';
+  } finally {
+    adminLoginSubmit.disabled = false;
+    adminLoginSubmit.textContent = 'Log In';
+  }
+});
+
+
+/* Allow Enter key to submit login */
+
+adminPassInput.addEventListener('keydown', function (event) {
+  if (event.key === 'Enter') {
+    adminLoginSubmit.click();
+  }
+});
+
+
+/* Logout */
+
+adminLogoutBtn.addEventListener('click', async function () {
+  var result = await supabaseClient.auth.signOut({
+    scope: 'local'
   });
 
-  document.getElementById('adminLogoutBtn').addEventListener('click', function () {
-    try { sessionStorage.removeItem(ADMIN_SESSION_KEY); } catch (e) { /* ignore */ }
-    closeAdminScreens();
-    showToast('Logged out.');
-  });
+  if (result.error) {
+    console.error('Supabase logout failed:', result.error);
+  }
 
-  document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape') return;
-    closeBidModal();
-    if (adminLoginScreen.classList.contains('open')) closeAdminScreens();
-  });
+  adminDashboard.classList.remove('open');
+  adminLoginScreen.classList.remove('open');
 
+  adminUserInput.value = '';
+  adminPassInput.value = '';
+  adminLoginErr.textContent = '';
+});
   // ---------- dashboard tabs ----------
   document.querySelectorAll('.tab-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
