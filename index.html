@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<!--
+  ============================================================
+  TRAHE TROVE — unified prototype (storefront + gated admin)
+  Local-testing phase: no domain, no hosting, no backend yet.
+
+  Auction lifecycle: NOT STARTED -> ACTIVE -> ENDED. Adding a product
+  never starts its clock — an admin must explicitly press "Start
+  Auction" (one product) or "Start All Auctions" (every pending one)
+  from the Auctions tab. This is intentional: it lets you upload an
+  entire ~65-piece drop, review it, and launch everything at once.
+
+  SECURITY REALITY CHECK (read this before testing):
+  The admin login below is a LOCAL DEVELOPMENT LOGIN ONLY. It is a
+  plain JavaScript comparison against a password sitting in this
+  file's own source code. Anyone who opens devtools or views source
+  can read that password, or simply call the dashboard's functions
+  directly and skip the login screen entirely — the login is a UI
+  gate, not a real security boundary. That's fine for testing alone
+  on your own machine. It must never be deployed to any public URL
+  as-is. Phase 2 replaces this block with real server-side auth
+  (e.g. Supabase Auth) that a visitor genuinely cannot bypass.
+
+  Likewise, "start timestamps" below are this browser's Date.now().
+  In production the database/server must own start/end time — not
+  the visitor's device clock — exactly as the schema.sql design and
+  the place_bid()/close-auction sketches assume.
+  ============================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Trahe Trove — bid on the bin</title>
+<meta name="description" content="Trahe Trove — thrifted hoodies, one of a kind, sold to the highest bidder before the clock runs out.">
+<meta property="og:title" content="Trahe Trove">
+<!-- SITE CONFIG: this is the one place that names the production domain.
+     Update this single value if the final registered domain differs
+     from trahetrove.com — nothing else in the file needs to change. -->
+<link rel="canonical" href="https://trahetrove.com/">
+<meta property="og:url" content="https://trahetrove.com/">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="nav">
+  <p class="brand">Trahe Trove</p>
+  <nav class="main-nav" aria-label="Main navigation">
+    <button class="main-nav-btn active" type="button" data-section="home">HOME</button>
+    <button class="main-nav-btn" type="button" data-section="auctions">AUCTIONS <span class="live-count"><span class="live-dot"></span><span id="liveCount">0</span> live</span></button>
+    <button class="main-nav-btn" type="button" data-section="proof">PROOF</button>
+  </nav>
+</header>
+
+<main>
+  <section class="site-section active" id="homeSection" aria-labelledby="homeTitle">
+    <div class="home-wrap">
+      <div class="home-kicker mono">OFFICIAL BUYER INFORMATION</div>
+      <h1 id="homeTitle" class="home-title">KNOW BEFORE<br>YOU BID.</h1>
+
+      <section class="notice-card" aria-labelledby="noticeTitle">
+        <div class="notice-label" id="noticeTitle">NOTICE:</div>
+        <div class="gcash-number">OFFICIAL AND ONLY GCASH NO. : 09954277026 (RJC)</div>
+        <div class="scam-warning">BEWARE OF SCAMMERS</div>
+        <div class="responsible">BE A RESPONSIBLE BIDDER.</div>
+      </section>
+
+      <section class="reminders-section" aria-labelledby="remindersTitle">
+        <div class="section-heading">
+          <span class="section-mark">02</span>
+          <h2 id="remindersTitle">REMINDERS:</h2>
+        </div>
+
+        <div class="reminders-grid">
+          <article class="info-card info-card-wide">
+            <h3>PAYMENT</h3>
+            <ul>
+              <li>NO Cash On Delivery!</li>
+              <li>Mode of Payment: GCash.</li>
+              <li>No COD / No Return Policy.</li>
+            </ul>
+          </article>
+
+          <article class="info-card info-card-wide">
+            <h3>SHIPPING</h3>
+            <ul>
+              <li>1-3 days shipout (depends on our schedule)</li>
+              <li>Shipping Fee: 70 up</li>
+              <li>Courier: J&amp;T or Lalamove.</li>
+              <li>Open For Pick Up</li>
+            </ul>
+          </article>
+
+          <article class="info-card">
+            <h3>BIDDING</h3>
+            <ul>
+              <li>Please make sure you know your size before bid. Items with incorrect sizing will NOT be refunded</li>
+              <li>Reservation: 1 day only.</li>
+              <li>Bogus buyers and joy reservers will be blocked</li>
+            </ul>
+          </article>
+
+          <article class="info-card">
+            <h3>ITEM INFORMATION</h3>
+            <ul>
+              <li>Colors may vary slightly due to lighting conditions.</li>
+              <li>All items are thrifted, please manage your expectations.</li>
+              <li>Items are prewashed through laundry, but we still recommend rewashing them for your safety</li>
+              <li>Check each caption for item descriptions.</li>
+            </ul>
+          </article>
+
+          <article class="info-card info-card-wide policies-card">
+            <h3>POLICIES</h3>
+            <ul>
+              <li>ALL TRANSACTIONS ARE DONE ON THIS PAGE ONLY. PLEASE BEWARE OF SCAMMERS.</li>
+              <li>No COD / No Return Policy.</li>
+            </ul>
+          </article>
+
+          <article class="info-card location-card">
+            <h3>LOCATION</h3>
+            <p>📌 Location: Metro manila Parañaque</p>
+          </article>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <section class="site-section" id="auctionsSection" aria-labelledby="auctionsTitle" hidden>
+    <div class="auctions-wrap">
+      <div class="auction-heading">
+        <div>
+          <div class="home-kicker mono">TRAHE TROVE / LIVE DROP</div>
+          <h2 id="auctionsTitle">AUCTIONS</h2>
+        </div>
+        <div class="auction-note">HIGHEST BID WINS</div>
+      </div>
+      <main class="board" id="board"></main>
+    </div>
+  </section>
+
+  <section class="site-section" id="proofSection" aria-labelledby="proofTitle" hidden>
+    <div class="proof-wrap">
+      <div class="proof-heading">
+        <div>
+          <div class="home-kicker mono">TRAHE TROVE / TRANSACTION RECORD</div>
+          <h2 id="proofTitle">PROOF &amp; WAYBILLS</h2>
+        </div>
+        <div class="auction-note">REAL SHIPMENTS. REAL PROOF.</div>
+      </div>
+
+      <div class="proof-grid">
+        <section class="proof-panel" aria-labelledby="waybillTitle">
+          <div class="proof-panel-head">
+            <span class="section-mark">01</span>
+            <div>
+              <h3 id="waybillTitle">WAYBILL</h3>
+              <p>Photos of waybills from products that have been shipped.</p>
+            </div>
+          </div>
+          <div class="proof-gallery" id="waybillGallery"></div>
+        </section>
+
+        <section class="proof-panel" aria-labelledby="legitimacyTitle">
+          <div class="proof-panel-head">
+            <span class="section-mark">02</span>
+            <div>
+              <h3 id="legitimacyTitle">PROOF OF LEGITIMACY</h3>
+              <p>Proof of shipment and completed transactions.</p>
+            </div>
+          </div>
+          <div class="proof-gallery" id="legitimacyGallery"></div>
+        </section>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  Prototype — bids and listings are stored only in this browser, for demo purposes. A live version needs a real server so every visitor sees the same bids, plus a payment integration.
+  <br>
+  <button class="admin-link" id="openAdminLogin">Admin Login</button>
+</footer>
+
+<!-- bid modal -->
+<div class="overlay" id="bidOverlay">
+  <div class="modal">
+    <button class="close-x" id="closeModal" aria-label="Close">✕</button>
+    <h2 id="modalItemName">Item</h2>
+    <p class="sub" id="modalItemSub">Size — note</p>
+    <p class="sub">Current bid: <span id="modalCurrentBid" class="mono">₱0</span> · minimum next bid <span id="modalMinBid" class="mono">₱0</span></p>
+    <label for="bidName">Your name</label>
+    <input id="bidName" type="text" placeholder="e.g. Marga R." autocomplete="name">
+    <label for="bidPhone">GCash / Maya number</label>
+    <input id="bidPhone" type="tel" placeholder="09XX XXX XXXX" autocomplete="tel">
+    <label for="bidAmount">Your bid (₱)</label>
+    <input id="bidAmount" type="number" inputmode="numeric">
+    <div class="err" id="modalErr"></div>
+    <button class="submit" id="submitBid">Place bid</button>
+  </div>
+</div>
+
+<!-- admin login screen -->
+<div class="admin-screen" id="adminLoginScreen">
+  <div class="admin-wrap">
+    <button class="back-link" id="adminLoginBack">← Back to store</button>
+    <div class="admin-card">
+      <h2>Admin Login</h2>
+      <div class="dev-warning">
+        ⚠ LOCAL DEVELOPMENT LOGIN ONLY. This check runs entirely in your
+        browser — the password lives in this file's own source code, so
+        it is not secure and must never be used on a public or deployed
+        site. It exists only so you can test the dashboard locally.
+        Phase 2 replaces this with real server-side auth.
+      </div>
+      <label for="adminUserInput">Username</label>
+      <input id="adminUserInput" type="text" autocomplete="username">
+      <label for="adminPassInput">Password</label>
+      <input id="adminPassInput" type="password" autocomplete="current-password">
+      <div class="err" id="adminLoginErr"></div>
+      <button class="submit" id="adminLoginSubmit">Log In</button>
+    </div>
+  </div>
+</div>
+
+<!-- admin dashboard -->
+<div class="admin-screen" id="adminDashboard">
+  <div class="dash-wrap">
+    <div class="dash-nav">
+      <p class="brand" style="margin:0;">Trahe Trove <span style="font-size:0.5em;opacity:0.6;">· admin</span></p>
+      <button class="logout-btn" id="adminLogoutBtn">Logout</button>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="products" type="button">Products</button>
+      <button class="tab-btn" data-tab="auctions" type="button">Auctions</button>
+      <button class="tab-btn" data-tab="orders" type="button">Orders</button>
+      <button class="tab-btn" data-tab="payments" type="button">Payments</button>
+      <button class="tab-btn" data-tab="proof" type="button">Proof &amp; Waybill</button>
+    </div>
+
+    <!-- PRODUCTS -->
+    <div class="tab-panel active" id="panel-products">
+      <div class="form-grid">
+        <h3 id="productFormTitle">Add a hoodie</h3>
+        <p class="field-note">Adding a hoodie here creates its auction as <b>Not Started</b> — it will not be visible for bidding, and its clock will not run, until you start it from the Auctions tab.</p>
+
+        <label for="pName">Hoodie name / title</label>
+        <input id="pName" type="text" placeholder="e.g. Grey Marled Hoodie">
+
+        <div class="form-row">
+          <div>
+            <label for="pSize">Size</label>
+            <input id="pSize" type="text" placeholder="e.g. M">
+          </div>
+          <div>
+            <label for="pCondition">Condition</label>
+            <input id="pCondition" type="text" placeholder="e.g. Good — light pilling">
+          </div>
+        </div>
+
+        <label for="pDescription">Description</label>
+        <input id="pDescription" type="text" placeholder="e.g. Boxy fit, small snag on left cuff">
+
+        <div class="form-row">
+          <div>
+            <label for="pStartBid">Starting bid (₱)</label>
+            <input id="pStartBid" type="number" inputmode="numeric">
+          </div>
+          <div>
+            <label for="pIncrement">Minimum bid increment (₱)</label>
+            <input id="pIncrement" type="number" inputmode="numeric" value="50">
+          </div>
+        </div>
+
+        <label>Auction duration (applied once you press Start)</label>
+        <div class="duration-row">
+          <input id="pDurationValue" type="number" inputmode="numeric" value="24">
+          <select id="pDurationUnit">
+            <option value="minutes">minutes</option>
+            <option value="hours" selected>hours</option>
+          </select>
+        </div>
+        <p class="field-note">This is saved as the auction's length, but the clock does NOT start now. Real drops run 24 hours once started; switch to minutes only to test the countdown quickly after starting it.</p>
+        <p class="field-note warn" id="lockedFieldsNote" style="display:none;">This auction has already started — starting bid, increment, and duration are locked and won't change from this form.</p>
+
+        <label for="pImage">Product image</label>
+        <input id="pImage" type="file" accept="image/*">
+        <img class="image-preview" id="pImagePreview" alt="Preview of the uploaded product photo">
+
+        <label for="pColor">Optional swatch color (used only if no image is uploaded)</label>
+        <input id="pColor" type="color" value="#4a5535">
+
+        <div class="err" id="productFormErr"></div>
+        <button class="submit" id="productFormSubmit" type="button">Add to the bin</button>
+        <button class="mini-btn" id="productFormCancel" type="button" style="margin-top:8px;display:none;">Cancel edit</button>
+      </div>
+
+      <div class="admin-list" id="productList"></div>
+    </div>
+
+    <!-- AUCTIONS -->
+    <div class="tab-panel" id="panel-auctions">
+      <div class="drop-bar">
+        <label for="dropNameInput">Current drop</label>
+        <input id="dropNameInput" type="text" placeholder="e.g. September Hoodie Drop">
+      </div>
+
+      <button class="start-all-btn" id="startAllBtn" type="button">▶ START ALL AUCTIONS</button>
+      <p class="field-note" style="margin:8px 0 26px;">Starts every "Not Started" auction below at essentially the same moment. Each runs for its own configured duration (24h by default) from that moment.</p>
+
+      <h3>Not started (<span id="notStartedCount">0</span>)</h3>
+      <div class="admin-list" id="notStartedList"></div>
+
+      <h3 style="margin-top:26px;">Active (<span id="activeCount">0</span>)</h3>
+      <div class="admin-list" id="activeAuctionList"></div>
+
+      <h3 style="margin-top:26px;">Ended (<span id="endedCount">0</span>)</h3>
+      <div class="admin-list" id="endedAuctionList"></div>
+    </div>
+
+    <!-- ORDERS -->
+    <div class="tab-panel" id="panel-orders">
+      <div class="placeholder-note">
+        Orders aren't a real feature yet — there's no backend to hold a
+        distinct order record (buyer, shipping address, courier,
+        tracking). Once Phase 2 connects a database, a won auction will
+        automatically create an order here. For now, see the winner and
+        winning bid under the Auctions tab.
+      </div>
+    </div>
+
+    <!-- PAYMENTS -->
+    <div class="tab-panel" id="panel-payments">
+      <p class="field-note" style="margin-bottom:12px;">This only records what you tell it — it does not contact GCash/Maya or verify any real transaction. Confirm payment yourself in your GCash/Maya app first, then mark it here.</p>
+      <div class="admin-list" id="paymentList"></div>
+    </div>
+
+    <!-- PROOF & WAYBILL -->
+    <div class="tab-panel" id="panel-proof">
+      <p class="field-note">Upload shipment evidence here. These images are displayed publicly in the PROOF section. In this prototype they are stored in this browser's localStorage, so a future live version should move them to server/cloud storage.</p>
+      <div class="form-grid proof-admin-grid">
+        <div class="info-card">
+          <h3>WAYBILLS</h3>
+          <label for="waybillUpload">Upload waybill images</label>
+          <input id="waybillUpload" type="file" accept="image/*" multiple>
+          <label for="waybillDeleteDate">Auto-delete date</label>
+          <input id="waybillDeleteDate" type="date">
+          <p class="field-note">Choose when the uploaded Waybills should automatically be removed. Each upload uses the date selected here.</p>
+        </div>
+        <div class="info-card">
+          <h3>PROOF OF LEGITIMACY</h3>
+          <label for="legitimacyUpload">Upload proof of shipment</label>
+          <input id="legitimacyUpload" type="file" accept="image/*" multiple>
+          <p class="field-note">Use photos/screenshots that show completed shipments or transactions.</p>
+        </div>
+      </div>
+      <div class="admin-list" id="proofAdminList"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="script.js"></script>
+</body>
+</html>
