@@ -841,17 +841,39 @@ adminLogoutBtn.addEventListener('click', async function () {
     document.getElementById('panel-products').scrollIntoView({ behavior: 'smooth' });
   }
 
-  function deleteProduct(item) {
-    var msg = 'Delete "' + item.name + '"? This cannot be undone.';
-    if (item.status === 'active' && item.bidderName) {
-      msg = 'Delete "' + item.name + '"? It currently has a live bid from ' + item.bidderName + ' — deleting removes it entirely. This cannot be undone.';
+  async function deleteProduct(item) {
+  var msg = 'Delete "' + item.name + '"? This cannot be undone.';
+
+  if (item.status === 'active' && item.bidderName) {
+    msg = 'Delete "' + item.name + '"? It currently has a live bid from ' + item.bidderName + ' — deleting removes it entirely. This cannot be undone.';
+  }
+
+  if (!confirm(msg)) return;
+
+  try {
+    var result = await supabaseClient
+      .from('products')
+      .delete()
+      .eq('id', item.id);
+
+    if (result.error) {
+      console.error('Supabase product delete failed:', result.error);
+      showToast('Could not delete from the database.');
+      return;
     }
-    if (!confirm(msg)) return;
-    state.items = state.items.filter(function (i) { return i.id !== item.id; });
+
+    state.items = state.items.filter(function (i) {
+      return i.id !== item.id;
+    });
+
     save();
     renderAll();
     showToast('"' + item.name + '" deleted.');
+  } catch (error) {
+    console.error('Supabase delete error:', error);
+    showToast('Could not delete from the database.');
   }
+}
 
   // ---------- start auction(s) ----------
   function startAuction(item) {
