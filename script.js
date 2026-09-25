@@ -19,7 +19,7 @@ supabaseClient.auth.getSession().then(function (result) {
     console.log('✅ Supabase connection successful!');
   }
 });
-  );
+
   var SITE_URL = 'https://trahetrove.com';
 
   var STORAGE_KEY = 'trahe_trove_state_v1';
