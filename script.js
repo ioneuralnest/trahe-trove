@@ -4,7 +4,7 @@
   // SUPABASE CONNECTION
   // ============================================================
 
-  var SUPABASE_URL = 'https://kmxmxmcoibdqstdqaoql.supabase.co/rest/v1/';
+  var SUPABASE_URL = 'https://kmxmxmcoibdqstdqaoql.supabase.co';
   var SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_fAE0svxCvFJhxAChgKgRyw_WY29obiN';
 
   var supabaseClient = window.supabase.createClient(
