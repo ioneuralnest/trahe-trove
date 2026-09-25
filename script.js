@@ -8,8 +8,17 @@
   var SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_fAE0svxCvFJhxAChgKgRyw_WY29obiN';
 
   var supabaseClient = window.supabase.createClient(
-    SUPABASE_URL,
-    SUPABASE_PUBLISHABLE_KEY
+  SUPABASE_URL,
+  SUPABASE_PUBLISHABLE_KEY
+);
+
+supabaseClient.auth.getSession().then(function (result) {
+  if (result.error) {
+    console.error('Supabase connection failed:', result.error);
+  } else {
+    console.log('✅ Supabase connection successful!');
+  }
+});
   );
   var SITE_URL = 'https://trahetrove.com';
 
