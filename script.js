@@ -828,7 +828,7 @@ adminLogoutBtn.addEventListener('click', async function () {
 
     var publicUrlResult = supabaseClient
       .storage
-      .from('product-images')
+      .from('product images')
       .getPublicUrl(filePath);
 
     finishSave(publicUrlResult.data.publicUrl);
