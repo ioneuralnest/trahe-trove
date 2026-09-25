@@ -1,4 +1,4 @@
-(function () {
+(async function () {
 
   // ============================================================
   // SUPABASE CONNECTION
@@ -51,32 +51,137 @@ supabaseClient.auth.getSession().then(function (result) {
     ];
   }
 
-  function load() {
+  function dbToItem(row) {
+    return {
+      id: row.id,
+      name: row.name,
+      size: row.size,
+      condition: row.condition,
+      description: row.description,
+      color: row.color,
+      image: row.image_url,
+      startPrice: Number(row.start_price),
+      increment: Number(row.increment),
+      durationMs: Number(row.duration_ms),
+      status: row.status,
+      startsAt: row.starts_at ? new Date(row.starts_at).getTime() : null,
+      endsAt: row.ends_at ? new Date(row.ends_at).getTime() : null,
+      currentBid: row.current_bid == null
+        ? Number(row.start_price)
+        : Number(row.current_bid),
+      bidderName: row.bidder_name,
+      bidderPhone: row.bidder_phone,
+      paid: !!row.paid
+    };
+  }
+
+  function itemToDb(item) {
+    return {
+      id: item.id,
+      name: item.name,
+      size: item.size || '—',
+      condition: item.condition || '—',
+      description: item.description || 'No description yet',
+      color: item.color || null,
+      image_url: item.image || null,
+      start_price: Number(item.startPrice) || 0,
+      increment: Number(item.increment) || 50,
+      duration_ms: Number(item.durationMs) || DEFAULT_DURATION_MS,
+      status: item.status || 'not_started',
+      starts_at: item.startsAt
+        ? new Date(item.startsAt).toISOString()
+        : null,
+      ends_at: item.endsAt
+        ? new Date(item.endsAt).toISOString()
+        : null,
+      current_bid: Number(item.currentBid) || Number(item.startPrice) || 0,
+      bidder_name: item.bidderName || null,
+      bidder_phone: item.bidderPhone || null,
+      paid: !!item.paid,
+      drop_name: state.dropName || 'September Hoodie Drop'
+    };
+  }
+
+  async function load() {
     try {
-      var raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        state = JSON.parse(raw);
-        // Migration for state saved by an earlier version of this
-        // prototype (before Not Started / Active / Ended existed):
-        // old items only had a boolean `sold`, always started
-        // immediately, and there was no drop name at all.
-        if (!state.dropName) state.dropName = 'September Hoodie Drop';
-        (state.items || []).forEach(function (item) {
-          if (!item.status) item.status = item.sold ? 'ended' : 'active';
-          if (item.durationMs == null) item.durationMs = DEFAULT_DURATION_MS;
-          if (item.startsAt === undefined) item.startsAt = null;
-          if (item.condition === undefined) item.condition = '—';
-          if (item.description === undefined) item.description = item.note || 'No description yet';
-          if (item.image === undefined) item.image = null;
-        });
+      var result = await supabaseClient
+        .from('products')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+      if (result.error) {
+        console.error('Supabase product load failed:', result.error);
+
+        // Temporary fallback so the site does not become blank
+        // if the database is unavailable.
+        var raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          state = JSON.parse(raw);
+          return;
+        }
+
+        state = {
+          items: defaultItems(),
+          dropName: 'September Hoodie Drop'
+        };
         return;
       }
-    } catch (e) { /* ignore, fall through to defaults */ }
-    state = { items: defaultItems(), dropName: 'September Hoodie Drop' };
-    save();
+
+      state.items = (result.data || []).map(dbToItem);
+
+      if (result.data && result.data.length) {
+        state.dropName =
+          result.data[0].drop_name || 'September Hoodie Drop';
+      } else {
+        state.dropName = 'September Hoodie Drop';
+      }
+
+      console.log(
+        '✅ Loaded ' + state.items.length + ' product(s) from Supabase.'
+      );
+
+    } catch (e) {
+      console.error('Supabase load error:', e);
+
+      var fallback = localStorage.getItem(STORAGE_KEY);
+
+      if (fallback) {
+        state = JSON.parse(fallback);
+      } else {
+        state = {
+          items: defaultItems(),
+          dropName: 'September Hoodie Drop'
+        };
+      }
+    }
   }
+
   function save() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* storage unavailable */ }
+    // Keep a local backup while we transition away from localStorage.
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (e) {}
+
+    // Send the current products to Supabase.
+    var rows = state.items.map(itemToDb);
+
+    if (!rows.length) {
+      return;
+    }
+
+    supabaseClient
+      .from('products')
+      .upsert(rows, { onConflict: 'id' })
+      .then(function (result) {
+        if (result.error) {
+          console.error('Supabase product save failed:', result.error);
+        } else {
+          console.log('✅ Products saved to Supabase.');
+        }
+      })
+      .catch(function (error) {
+        console.error('Supabase save error:', error);
+      });
   }
 
   function localDateTimeEnd(dateString) {
@@ -913,7 +1018,7 @@ adminLogoutBtn.addEventListener('click', async function () {
   }
 
   // ---------- clock ----------
-  load();
+   await load();
   renderAll();
   setInterval(renderAll, 1000);
 })();
