@@ -348,19 +348,45 @@ var filePath =
           continue;
         }
 
-        var publicUrlResult = supabaseClient
-          .storage
-          .from('legitimacy proofs')
-          .getPublicUrl(filePath);
+        var bucketName = type === 'waybills'
+  ? 'waybills'
+  : 'legitimacy proofs';
 
-        var publicUrl = publicUrlResult.data.publicUrl;
+var publicUrlResult = supabaseClient
+  .storage
+  .from(bucketName)
+  .getPublicUrl(filePath);
 
-        proofState[type].unshift({
-          image: publicUrl,
-          caption: label + ' • ' + file.name,
-          uploadedAt: uploadedAt,
-          expiresAt: expiresAt
-        });
+var publicUrl = publicUrlResult.data.publicUrl;
+
+if (type === 'waybills') {
+  var waybillResult = await supabaseClient
+    .from('waybills')
+    .insert({
+      storage_path: filePath,
+      uploaded_at: new Date(uploadedAt).toISOString(),
+      expires_at: new Date(expiresAt).toISOString()
+    });
+
+  if (waybillResult.error) {
+    console.error(
+      'Waybill record save failed:',
+      waybillResult.error
+    );
+    showToast(
+      'Waybill record save failed: ' +
+      waybillResult.error.message
+    );
+    continue;
+  }
+}
+
+proofState[type].unshift({
+  image: publicUrl,
+  caption: label + ' • ' + file.name,
+  uploadedAt: uploadedAt,
+  expiresAt: expiresAt
+});
 
       } catch (error) {
         console.error('Proof image upload error:', error);
