@@ -1,9 +1,16 @@
 (function () {
-  // SITE CONFIG — the one place the production domain is named in the
-  // app's logic. Nothing reads this yet, because this prototype is still
-  // a single page with no separate /shop, /login, or email templates —
-  // but once those exist (later phases), they build their links from
-  // this constant instead of typing the domain in each place.
+
+  // ============================================================
+  // SUPABASE CONNECTION
+  // ============================================================
+
+  var SUPABASE_URL = 'YOUR_SUPABASE_PROJECT_URL';
+  var SUPABASE_PUBLISHABLE_KEY = 'YOUR_SUPABASE_PUBLISHABLE_KEY';
+
+  var supabaseClient = window.supabase.createClient(
+    SUPABASE_URL,
+    SUPABASE_PUBLISHABLE_KEY
+  );
   var SITE_URL = 'https://trahetrove.com';
 
   var STORAGE_KEY = 'trahe_trove_state_v1';
