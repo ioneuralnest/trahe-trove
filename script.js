@@ -791,7 +791,7 @@ adminLogoutBtn.addEventListener('click', async function () {
         }
       } else {
         state.items.unshift({
-          id: 'p' + Date.now(),
+         id: crypto.randomUUID(),
           name: name, size: size, condition: condition, description: description,
           color: color, image: imageData || null,
           startPrice: startBid, increment: increment, durationMs: ms,
