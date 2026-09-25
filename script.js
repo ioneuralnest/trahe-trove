@@ -313,11 +313,20 @@ supabaseClient.auth.getSession().then(function (result) {
       }
 
       try {
-        var filePath =
-          'proofs/' +
-          crypto.randomUUID() +
-          '-' +
-          file.name;
+        var bucketName = type === 'waybills'
+  ? 'waybills'
+  : 'legitimacy proofs';
+
+var folderName = type === 'waybills'
+  ? 'waybills'
+  : 'proofs';
+
+var filePath =
+  folderName +
+  '/' +
+  crypto.randomUUID() +
+  '-' +
+  file.name;
 
         var uploadResult = await supabaseClient
           .storage
