@@ -4,8 +4,8 @@
   // SUPABASE CONNECTION
   // ============================================================
 
-  var SUPABASE_URL = 'YOUR_SUPABASE_PROJECT_URL';
-  var SUPABASE_PUBLISHABLE_KEY = 'YOUR_SUPABASE_PUBLISHABLE_KEY';
+  var SUPABASE_URL = 'https://kmxmxmcoibdqstdqaoql.supabase.co/rest/v1/';
+  var SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_fAE0svxCvFJhxAChgKgRyw_WY29obiN';
 
   var supabaseClient = window.supabase.createClient(
     SUPABASE_URL,
