@@ -757,7 +757,7 @@ adminLogoutBtn.addEventListener('click', async function () {
   }
   document.getElementById('productFormCancel').addEventListener('click', resetProductForm);
 
-  document.getElementById('productFormSubmit').addEventListener('click', function () {
+  document.getElementById('productFormSubmit').addEventListener('click', async function () {
     var name = document.getElementById('pName').value.trim();
     var size = document.getElementById('pSize').value.trim() || '—';
     var condition = document.getElementById('pCondition').value.trim() || '—';
@@ -807,13 +807,40 @@ adminLogoutBtn.addEventListener('click', async function () {
       resetProductForm();
     }
 
-    if (fileInput.files && fileInput.files[0]) {
-      var reader = new FileReader();
-      reader.onload = function (e) { finishSave(e.target.result); };
-      reader.readAsDataURL(fileInput.files[0]);
-    } else {
-      finishSave(undefined);
+   if (fileInput.files && fileInput.files[0]) {
+  var file = fileInput.files[0];
+  var filePath = 'products/' + crypto.randomUUID() + '-' + file.name;
+
+  try {
+    var uploadResult = await supabaseClient
+      .storage
+      .from('product-images')
+      .upload(filePath, file, {
+        contentType: file.type,
+        upsert: false
+      });
+
+    if (uploadResult.error) {
+      console.error('Product image upload failed:', uploadResult.error);
+      errEl.textContent = 'Image upload failed. Please try again.';
+      return;
     }
+
+    var publicUrlResult = supabaseClient
+      .storage
+      .from('product-images')
+      .getPublicUrl(filePath);
+
+    finishSave(publicUrlResult.data.publicUrl);
+
+  } catch (error) {
+    console.error('Product image upload error:', error);
+    errEl.textContent = 'Image upload failed. Please try again.';
+  }
+
+} else {
+  finishSave(undefined);
+}
   });
 
   function editProduct(item) {
