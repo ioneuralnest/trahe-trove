@@ -330,7 +330,7 @@ var filePath =
 
         var uploadResult = await supabaseClient
           .storage
-          .from('legitimacy proofs')
+          .from(bucketName)
           .upload(filePath, file, {
             contentType: file.type,
             upsert: false
