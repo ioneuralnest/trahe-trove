@@ -738,7 +738,24 @@ adminLoginSubmit.addEventListener('click', async function () {
       return;
     }
 
-    showAdminDashboard();
+    var aalResult =
+  await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+if (aalResult.error) {
+  adminLoginErr.textContent =
+    'Unable to verify account security.';
+  await supabaseClient.auth.signOut();
+  return;
+}
+
+if (aalResult.data.currentLevel === 'aal2') {
+  showAdminDashboard();
+} else {
+  adminLoginErr.textContent =
+    'Two-factor authentication is required.';
+  await supabaseClient.auth.signOut();
+  return;
+}
 
   } catch (error) {
     console.error('Unexpected login error:', error);
