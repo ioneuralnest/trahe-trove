@@ -786,11 +786,28 @@ if (aalResult.error) {
 
 if (aalResult.data.currentLevel === 'aal2') {
   showAdminDashboard();
+
+} else if (aalResult.data.nextLevel === 'aal2') {
+  // MFA is enrolled but verification is required.
+  var factorsResult =
+    await supabaseClient.auth.mfa.listFactors();
+
+  if (factorsResult.error) {
+    throw factorsResult.error;
+  }
+
+  var totpFactor = factorsResult.data.totp[0];
+
+  if (!totpFactor) {
+    throw new Error('No verified authenticator found.');
+  }
+
+  currentMfaFactorId = totpFactor.id;
+  showAdminMfaScreen();
+
 } else {
-  adminLoginErr.textContent =
-    'Two-factor authentication is required.';
-  await supabaseClient.auth.signOut();
-  return;
+  // No MFA enrolled yet.
+  await startAdminMfaEnrollment();
 }
 
   } catch (error) {
