@@ -640,6 +640,38 @@ var adminLoginErr = document.getElementById('adminLoginErr');
 var adminUserInput = document.getElementById('adminUserInput');
 var adminPassInput = document.getElementById('adminPassInput');
 
+  // MFA verification screen
+var adminMfaScreen =
+  document.getElementById('adminMfaScreen');
+
+var adminMfaCode =
+  document.getElementById('adminMfaCode');
+
+var adminMfaErr =
+  document.getElementById('adminMfaErr');
+
+var adminMfaSubmit =
+  document.getElementById('adminMfaSubmit');
+
+// MFA enrollment screen
+var adminMfaEnrollScreen =
+  document.getElementById('adminMfaEnrollScreen');
+
+var adminMfaQr =
+  document.getElementById('adminMfaQr');
+
+var adminMfaEnrollCode =
+  document.getElementById('adminMfaEnrollCode');
+
+var adminMfaEnrollErr =
+  document.getElementById('adminMfaEnrollErr');
+
+var adminMfaEnrollSubmit =
+  document.getElementById('adminMfaEnrollSubmit');
+
+// Stores the current MFA factor during verification
+var currentMfaFactorId = null;
+
 function showAdminLogin() {
   adminLoginScreen.classList.add('open');
   adminDashboard.classList.remove('open');
@@ -659,20 +691,15 @@ function showAdminDashboard() {
 }
 
 async function checkAdminSession() {
-  var result = await supabaseClient.auth.getSession();
+  var result = await supabaseClient.auth.getUser();
 
-  if (result.error) {
-    console.error('Could not check Supabase session:', result.error);
+  if (result.error || !result.data.user) {
     return false;
   }
 
-  var session = result.data.session;
+  var user = result.data.user;
 
-  if (!session || !session.user) {
-    return false;
-  }
-
-  var email = (session.user.email || '').toLowerCase().trim();
+  var email = (user.email || '').toLowerCase().trim();
   var allowedEmail = ADMIN_EMAIL.toLowerCase().trim();
 
   if (email !== allowedEmail) {
@@ -680,7 +707,16 @@ async function checkAdminSession() {
     return false;
   }
 
-  return true;
+  // Require completed MFA verification.
+  var aalResult =
+    await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+  if (aalResult.error) {
+    console.error('MFA check failed:', aalResult.error);
+    return false;
+  }
+
+  return aalResult.data.currentLevel === 'aal2';
 }
 
 
@@ -738,7 +774,41 @@ adminLoginSubmit.addEventListener('click', async function () {
       return;
     }
 
-    showAdminDashboard();
+    var aalResult =
+  await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+if (aalResult.error) {
+  adminLoginErr.textContent =
+    'Unable to verify account security.';
+  await supabaseClient.auth.signOut();
+  return;
+}
+
+if (aalResult.data.currentLevel === 'aal2') {
+  showAdminDashboard();
+
+} else if (aalResult.data.nextLevel === 'aal2') {
+  // MFA is enrolled but verification is required.
+  var factorsResult =
+    await supabaseClient.auth.mfa.listFactors();
+
+  if (factorsResult.error) {
+    throw factorsResult.error;
+  }
+
+  var totpFactor = factorsResult.data.totp[0];
+
+  if (!totpFactor) {
+    throw new Error('No verified authenticator found.');
+  }
+
+  currentMfaFactorId = totpFactor.id;
+  showAdminMfaScreen();
+
+} else {
+  // No MFA enrolled yet.
+  await startAdminMfaEnrollment();
+}
 
   } catch (error) {
     console.error('Unexpected login error:', error);
@@ -747,6 +817,169 @@ adminLoginSubmit.addEventListener('click', async function () {
     adminLoginSubmit.disabled = false;
     adminLoginSubmit.textContent = 'Log In';
   }
+  function showAdminMfaScreen() {
+  adminLoginScreen.classList.remove('open');
+  adminDashboard.classList.remove('open');
+  adminMfaEnrollScreen.classList.remove('open');
+
+  adminMfaScreen.classList.add('open');
+
+  adminMfaErr.textContent = '';
+  adminMfaCode.value = '';
+}
+
+function showAdminMfaEnrollScreen() {
+  adminLoginScreen.classList.remove('open');
+  adminDashboard.classList.remove('open');
+  adminMfaScreen.classList.remove('open');
+
+  adminMfaEnrollScreen.classList.add('open');
+
+  adminMfaEnrollErr.textContent = '';
+  adminMfaEnrollCode.value = '';
+}
+  async function startAdminMfaEnrollment() {
+  try {
+    var result = await supabaseClient.auth.mfa.enroll({
+      factorType: 'totp',
+      friendlyName: 'Trahe Trove Admin'
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    currentMfaFactorId = result.data.id;
+
+    // Display the QR code supplied by Supabase.
+    var qrImage = document.createElement('img');
+    qrImage.src = result.data.totp.qr_code;
+    qrImage.alt = 'Authenticator setup QR code';
+    qrImage.style.maxWidth = '220px';
+    qrImage.style.width = '100%';
+
+    adminMfaQr.replaceChildren(qrImage);
+
+    showAdminMfaEnrollScreen();
+
+  } catch (error) {
+    console.error('MFA enrollment failed:', error);
+
+    adminLoginErr.textContent =
+      'Could not start two-factor authentication setup.';
+  }
+}
+  adminMfaSubmit.addEventListener('click', async function () {
+  var code = adminMfaCode.value.trim();
+
+  adminMfaErr.textContent = '';
+
+  if (!/^\d{6}$/.test(code)) {
+    adminMfaErr.textContent =
+      'Please enter a valid 6-digit code.';
+    return;
+  }
+
+  if (!currentMfaFactorId) {
+    adminMfaErr.textContent =
+      'Please sign in again.';
+    return;
+  }
+
+  adminMfaSubmit.disabled = true;
+  adminMfaSubmit.textContent = 'Verifying...';
+
+  try {
+    var result =
+      await supabaseClient.auth.mfa.challengeAndVerify({
+        factorId: currentMfaFactorId,
+        code: code
+      });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    var aalResult =
+      await supabaseClient.auth.mfa
+        .getAuthenticatorAssuranceLevel();
+
+    if (
+      aalResult.error ||
+      aalResult.data.currentLevel !== 'aal2'
+    ) {
+      throw new Error('MFA verification failed.');
+    }
+
+    currentMfaFactorId = null;
+    adminMfaCode.value = '';
+
+    adminMfaScreen.classList.remove('open');
+    showAdminDashboard();
+
+  } catch (error) {
+    console.error('MFA verification failed:', error);
+
+    adminMfaErr.textContent =
+      'Invalid or expired code. Please try again.';
+
+  } finally {
+    adminMfaSubmit.disabled = false;
+    adminMfaSubmit.textContent = 'Verify Code';
+  }
+});
+  adminMfaEnrollSubmit.addEventListener('click', async function () {
+  var code = adminMfaEnrollCode.value.trim();
+
+  adminMfaEnrollErr.textContent = '';
+
+  if (!/^\d{6}$/.test(code)) {
+    adminMfaEnrollErr.textContent =
+      'Please enter a valid 6-digit code.';
+    return;
+  }
+
+  if (!currentMfaFactorId) {
+    adminMfaEnrollErr.textContent =
+      'Please restart MFA setup.';
+    return;
+  }
+
+  adminMfaEnrollSubmit.disabled = true;
+
+  try {
+    var result = await supabaseClient.auth.mfa.challengeAndVerify({
+      factorId: currentMfaFactorId,
+      code: code
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    var aalResult =
+      await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+    if (aalResult.error ||
+        aalResult.data.currentLevel !== 'aal2') {
+      throw new Error('MFA verification was not completed.');
+    }
+
+    currentMfaFactorId = null;
+    adminMfaQr.replaceChildren();
+    adminMfaEnrollCode.value = '';
+
+    adminMfaEnrollScreen.classList.remove('open');
+    showAdminDashboard();
+
+  } catch (error) {
+    console.error('MFA activation failed:', error);
+    adminMfaEnrollErr.textContent =
+      'Invalid code or verification failed. Please try again.';
+  } finally {
+    adminMfaEnrollSubmit.disabled = false;
+  }
+});
 });
 
 
