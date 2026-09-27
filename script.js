@@ -869,6 +869,65 @@ function showAdminMfaEnrollScreen() {
       'Could not start two-factor authentication setup.';
   }
 }
+  adminMfaSubmit.addEventListener('click', async function () {
+  var code = adminMfaCode.value.trim();
+
+  adminMfaErr.textContent = '';
+
+  if (!/^\d{6}$/.test(code)) {
+    adminMfaErr.textContent =
+      'Please enter a valid 6-digit code.';
+    return;
+  }
+
+  if (!currentMfaFactorId) {
+    adminMfaErr.textContent =
+      'Please sign in again.';
+    return;
+  }
+
+  adminMfaSubmit.disabled = true;
+  adminMfaSubmit.textContent = 'Verifying...';
+
+  try {
+    var result =
+      await supabaseClient.auth.mfa.challengeAndVerify({
+        factorId: currentMfaFactorId,
+        code: code
+      });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    var aalResult =
+      await supabaseClient.auth.mfa
+        .getAuthenticatorAssuranceLevel();
+
+    if (
+      aalResult.error ||
+      aalResult.data.currentLevel !== 'aal2'
+    ) {
+      throw new Error('MFA verification failed.');
+    }
+
+    currentMfaFactorId = null;
+    adminMfaCode.value = '';
+
+    adminMfaScreen.classList.remove('open');
+    showAdminDashboard();
+
+  } catch (error) {
+    console.error('MFA verification failed:', error);
+
+    adminMfaErr.textContent =
+      'Invalid or expired code. Please try again.';
+
+  } finally {
+    adminMfaSubmit.disabled = false;
+    adminMfaSubmit.textContent = 'Verify Code';
+  }
+});
   adminMfaEnrollSubmit.addEventListener('click', async function () {
   var code = adminMfaEnrollCode.value.trim();
 
