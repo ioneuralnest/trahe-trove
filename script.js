@@ -852,6 +852,58 @@ function showAdminMfaEnrollScreen() {
       'Could not start two-factor authentication setup.';
   }
 }
+  adminMfaEnrollSubmit.addEventListener('click', async function () {
+  var code = adminMfaEnrollCode.value.trim();
+
+  adminMfaEnrollErr.textContent = '';
+
+  if (!/^\d{6}$/.test(code)) {
+    adminMfaEnrollErr.textContent =
+      'Please enter a valid 6-digit code.';
+    return;
+  }
+
+  if (!currentMfaFactorId) {
+    adminMfaEnrollErr.textContent =
+      'Please restart MFA setup.';
+    return;
+  }
+
+  adminMfaEnrollSubmit.disabled = true;
+
+  try {
+    var result = await supabaseClient.auth.mfa.challengeAndVerify({
+      factorId: currentMfaFactorId,
+      code: code
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    var aalResult =
+      await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+    if (aalResult.error ||
+        aalResult.data.currentLevel !== 'aal2') {
+      throw new Error('MFA verification was not completed.');
+    }
+
+    currentMfaFactorId = null;
+    adminMfaQr.replaceChildren();
+    adminMfaEnrollCode.value = '';
+
+    adminMfaEnrollScreen.classList.remove('open');
+    showAdminDashboard();
+
+  } catch (error) {
+    console.error('MFA activation failed:', error);
+    adminMfaEnrollErr.textContent =
+      'Invalid code or verification failed. Please try again.';
+  } finally {
+    adminMfaEnrollSubmit.disabled = false;
+  }
+});
 });
 
 
