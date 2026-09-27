@@ -659,20 +659,15 @@ function showAdminDashboard() {
 }
 
 async function checkAdminSession() {
-  var result = await supabaseClient.auth.getSession();
+  var result = await supabaseClient.auth.getUser();
 
-  if (result.error) {
-    console.error('Could not check Supabase session:', result.error);
+  if (result.error || !result.data.user) {
     return false;
   }
 
-  var session = result.data.session;
+  var user = result.data.user;
 
-  if (!session || !session.user) {
-    return false;
-  }
-
-  var email = (session.user.email || '').toLowerCase().trim();
+  var email = (user.email || '').toLowerCase().trim();
   var allowedEmail = ADMIN_EMAIL.toLowerCase().trim();
 
   if (email !== allowedEmail) {
@@ -680,7 +675,16 @@ async function checkAdminSession() {
     return false;
   }
 
-  return true;
+  // Require completed MFA verification.
+  var aalResult =
+    await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+  if (aalResult.error) {
+    console.error('MFA check failed:', aalResult.error);
+    return false;
+  }
+
+  return aalResult.data.currentLevel === 'aal2';
 }
 
 
