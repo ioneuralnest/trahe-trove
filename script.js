@@ -800,6 +800,27 @@ if (aalResult.data.currentLevel === 'aal2') {
     adminLoginSubmit.disabled = false;
     adminLoginSubmit.textContent = 'Log In';
   }
+  function showAdminMfaScreen() {
+  adminLoginScreen.classList.remove('open');
+  adminDashboard.classList.remove('open');
+  adminMfaEnrollScreen.classList.remove('open');
+
+  adminMfaScreen.classList.add('open');
+
+  adminMfaErr.textContent = '';
+  adminMfaCode.value = '';
+}
+
+function showAdminMfaEnrollScreen() {
+  adminLoginScreen.classList.remove('open');
+  adminDashboard.classList.remove('open');
+  adminMfaScreen.classList.remove('open');
+
+  adminMfaEnrollScreen.classList.add('open');
+
+  adminMfaEnrollErr.textContent = '';
+  adminMfaEnrollCode.value = '';
+}
 });
 
 
