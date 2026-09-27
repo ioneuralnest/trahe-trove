@@ -821,6 +821,37 @@ function showAdminMfaEnrollScreen() {
   adminMfaEnrollErr.textContent = '';
   adminMfaEnrollCode.value = '';
 }
+  async function startAdminMfaEnrollment() {
+  try {
+    var result = await supabaseClient.auth.mfa.enroll({
+      factorType: 'totp',
+      friendlyName: 'Trahe Trove Admin'
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    currentMfaFactorId = result.data.id;
+
+    // Display the QR code supplied by Supabase.
+    var qrImage = document.createElement('img');
+    qrImage.src = result.data.totp.qr_code;
+    qrImage.alt = 'Authenticator setup QR code';
+    qrImage.style.maxWidth = '220px';
+    qrImage.style.width = '100%';
+
+    adminMfaQr.replaceChildren(qrImage);
+
+    showAdminMfaEnrollScreen();
+
+  } catch (error) {
+    console.error('MFA enrollment failed:', error);
+
+    adminLoginErr.textContent =
+      'Could not start two-factor authentication setup.';
+  }
+}
 });
 
 
