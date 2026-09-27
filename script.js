@@ -640,6 +640,38 @@ var adminLoginErr = document.getElementById('adminLoginErr');
 var adminUserInput = document.getElementById('adminUserInput');
 var adminPassInput = document.getElementById('adminPassInput');
 
+  // MFA verification screen
+var adminMfaScreen =
+  document.getElementById('adminMfaScreen');
+
+var adminMfaCode =
+  document.getElementById('adminMfaCode');
+
+var adminMfaErr =
+  document.getElementById('adminMfaErr');
+
+var adminMfaSubmit =
+  document.getElementById('adminMfaSubmit');
+
+// MFA enrollment screen
+var adminMfaEnrollScreen =
+  document.getElementById('adminMfaEnrollScreen');
+
+var adminMfaQr =
+  document.getElementById('adminMfaQr');
+
+var adminMfaEnrollCode =
+  document.getElementById('adminMfaEnrollCode');
+
+var adminMfaEnrollErr =
+  document.getElementById('adminMfaEnrollErr');
+
+var adminMfaEnrollSubmit =
+  document.getElementById('adminMfaEnrollSubmit');
+
+// Stores the current MFA factor during verification
+var currentMfaFactorId = null;
+
 function showAdminLogin() {
   adminLoginScreen.classList.add('open');
   adminDashboard.classList.remove('open');
