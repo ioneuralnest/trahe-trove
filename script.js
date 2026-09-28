@@ -593,7 +593,7 @@ proofState[type].unshift({
 
     if (!name) { errEl.textContent = 'Enter your name.'; return; }
     if (!phone) { errEl.textContent = 'Enter a GCash or Maya number to bid with.'; return; }
-    if (!amount || amount < minNext) { errEl.textContent = 'Bid must be at least ' + peso(minNext) + '.'; return; }
+    if (!Number.isFinite(amount) || amount < minNext) { errEl.textContent = 'Bid must be at least ' + peso(minNext) + '.'; return; }
     if (item.status !== 'active' || item.endsAt - Date.now() <= 0) {
       errEl.textContent = 'This auction is not open for bidding.';
       renderAll();
@@ -640,9 +640,43 @@ var adminLoginErr = document.getElementById('adminLoginErr');
 var adminUserInput = document.getElementById('adminUserInput');
 var adminPassInput = document.getElementById('adminPassInput');
 
+  // MFA verification screen
+var adminMfaScreen =
+  document.getElementById('adminMfaScreen');
+
+var adminMfaCode =
+  document.getElementById('adminMfaCode');
+
+var adminMfaErr =
+  document.getElementById('adminMfaErr');
+
+var adminMfaSubmit =
+  document.getElementById('adminMfaSubmit');
+
+// MFA enrollment screen
+var adminMfaEnrollScreen =
+  document.getElementById('adminMfaEnrollScreen');
+
+var adminMfaQr =
+  document.getElementById('adminMfaQr');
+
+var adminMfaEnrollCode =
+  document.getElementById('adminMfaEnrollCode');
+
+var adminMfaEnrollErr =
+  document.getElementById('adminMfaEnrollErr');
+
+var adminMfaEnrollSubmit =
+  document.getElementById('adminMfaEnrollSubmit');
+
+// Stores the current MFA factor during verification
+var currentMfaFactorId = null;
+
 function showAdminLogin() {
   adminLoginScreen.classList.add('open');
   adminDashboard.classList.remove('open');
+  adminMfaScreen.classList.remove('open');
+  adminMfaEnrollScreen.classList.remove('open');
 
   adminLoginErr.textContent = '';
   adminPassInput.value = '';
@@ -654,25 +688,20 @@ function showAdminDashboard() {
 
   adminLoginErr.textContent = '';
 
-  // Refresh the admin dashboard using the existing functions.
+  // UI visibility is not authorization; enforce admin + AAL2 with database RLS.
   renderAll();
 }
 
 async function checkAdminSession() {
-  var result = await supabaseClient.auth.getSession();
+  var result = await supabaseClient.auth.getUser();
 
-  if (result.error) {
-    console.error('Could not check Supabase session:', result.error);
+  if (result.error || !result.data.user) {
     return false;
   }
 
-  var session = result.data.session;
+  var user = result.data.user;
 
-  if (!session || !session.user) {
-    return false;
-  }
-
-  var email = (session.user.email || '').toLowerCase().trim();
+  var email = (user.email || '').toLowerCase().trim();
   var allowedEmail = ADMIN_EMAIL.toLowerCase().trim();
 
   if (email !== allowedEmail) {
@@ -680,7 +709,16 @@ async function checkAdminSession() {
     return false;
   }
 
-  return true;
+  // Require completed MFA verification.
+  var aalResult =
+    await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+  if (aalResult.error) {
+    console.error('MFA check failed:', aalResult.error);
+    return false;
+  }
+
+  return aalResult.data.currentLevel === 'aal2';
 }
 
 
@@ -738,7 +776,41 @@ adminLoginSubmit.addEventListener('click', async function () {
       return;
     }
 
-    showAdminDashboard();
+    var aalResult =
+  await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+if (aalResult.error) {
+  adminLoginErr.textContent =
+    'Unable to verify account security.';
+  await supabaseClient.auth.signOut();
+  return;
+}
+
+if (aalResult.data.currentLevel === 'aal2') {
+  showAdminDashboard();
+
+} else if (aalResult.data.nextLevel === 'aal2') {
+  // MFA is enrolled but verification is required.
+  var factorsResult =
+    await supabaseClient.auth.mfa.listFactors();
+
+  if (factorsResult.error) {
+    throw factorsResult.error;
+  }
+
+  var totpFactor = factorsResult.data.totp[0];
+
+  if (!totpFactor) {
+    throw new Error('No verified authenticator found.');
+  }
+
+  currentMfaFactorId = totpFactor.id;
+  showAdminMfaScreen();
+
+} else {
+  // No MFA enrolled yet.
+  await startAdminMfaEnrollment();
+}
 
   } catch (error) {
     console.error('Unexpected login error:', error);
@@ -747,8 +819,178 @@ adminLoginSubmit.addEventListener('click', async function () {
     adminLoginSubmit.disabled = false;
     adminLoginSubmit.textContent = 'Log In';
   }
+}); // End login handler; MFA listeners must be registered at startup.
+
+function showAdminMfaScreen() {
+  adminLoginScreen.classList.remove('open');
+  adminDashboard.classList.remove('open');
+  adminMfaEnrollScreen.classList.remove('open');
+
+  adminMfaScreen.classList.add('open');
+
+  adminMfaErr.textContent = '';
+  adminMfaCode.value = '';
+}
+
+function showAdminMfaEnrollScreen() {
+  adminLoginScreen.classList.remove('open');
+  adminDashboard.classList.remove('open');
+  adminMfaScreen.classList.remove('open');
+
+  adminMfaEnrollScreen.classList.add('open');
+
+  adminMfaEnrollErr.textContent = '';
+  adminMfaEnrollCode.value = '';
+}
+  async function startAdminMfaEnrollment() {
+  try {
+    var result = await supabaseClient.auth.mfa.enroll({
+      factorType: 'totp',
+      friendlyName: 'Trahe Trove Admin'
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    currentMfaFactorId = result.data.id;
+
+    // Display the QR code supplied by Supabase.
+    var qrImage = document.createElement('img');
+    qrImage.src = result.data.totp.qr_code;
+    qrImage.alt = 'Authenticator setup QR code';
+    qrImage.style.maxWidth = '220px';
+    qrImage.style.width = '100%';
+
+    adminMfaQr.replaceChildren(qrImage);
+
+    showAdminMfaEnrollScreen();
+
+  } catch (error) {
+    console.error('MFA enrollment failed:', error);
+
+    adminLoginErr.textContent =
+      'Could not start two-factor authentication setup.';
+  }
+}
+  adminMfaSubmit.addEventListener('click', async function () {
+  var code = adminMfaCode.value.trim();
+
+  adminMfaErr.textContent = '';
+
+  if (!/^\d{6}$/.test(code)) {
+    adminMfaErr.textContent =
+      'Please enter a valid 6-digit code.';
+    return;
+  }
+
+  if (!currentMfaFactorId) {
+    adminMfaErr.textContent =
+      'Please sign in again.';
+    return;
+  }
+
+  adminMfaSubmit.disabled = true;
+  adminMfaSubmit.textContent = 'Verifying...';
+
+  try {
+    var result =
+      await supabaseClient.auth.mfa.challengeAndVerify({
+        factorId: currentMfaFactorId,
+        code: code
+      });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    var aalResult =
+      await supabaseClient.auth.mfa
+        .getAuthenticatorAssuranceLevel();
+
+    if (
+      aalResult.error ||
+      aalResult.data.currentLevel !== 'aal2'
+    ) {
+      throw new Error('MFA verification failed.');
+    }
+
+    currentMfaFactorId = null;
+    adminMfaCode.value = '';
+
+    adminMfaScreen.classList.remove('open');
+    showAdminDashboard();
+
+  } catch (error) {
+    console.error('MFA verification failed:', error);
+
+    adminMfaErr.textContent =
+      'Invalid or expired code. Please try again.';
+
+  } finally {
+    adminMfaSubmit.disabled = false;
+    adminMfaSubmit.textContent = 'Verify Code';
+  }
+});
+  adminMfaEnrollSubmit.addEventListener('click', async function () {
+  var code = adminMfaEnrollCode.value.trim();
+
+  adminMfaEnrollErr.textContent = '';
+
+  if (!/^\d{6}$/.test(code)) {
+    adminMfaEnrollErr.textContent =
+      'Please enter a valid 6-digit code.';
+    return;
+  }
+
+  if (!currentMfaFactorId) {
+    adminMfaEnrollErr.textContent =
+      'Please restart MFA setup.';
+    return;
+  }
+
+  adminMfaEnrollSubmit.disabled = true;
+
+  try {
+    var result = await supabaseClient.auth.mfa.challengeAndVerify({
+      factorId: currentMfaFactorId,
+      code: code
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    var aalResult =
+      await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+    if (aalResult.error ||
+        aalResult.data.currentLevel !== 'aal2') {
+      throw new Error('MFA verification was not completed.');
+    }
+
+    currentMfaFactorId = null;
+    adminMfaQr.replaceChildren();
+    adminMfaEnrollCode.value = '';
+
+    adminMfaEnrollScreen.classList.remove('open');
+    showAdminDashboard();
+
+  } catch (error) {
+    console.error('MFA activation failed:', error);
+    adminMfaEnrollErr.textContent =
+      'Invalid code or verification failed. Please try again.';
+  } finally {
+    adminMfaEnrollSubmit.disabled = false;
+  }
 });
 
+adminMfaCode.addEventListener('keydown', function (event) {
+  if (event.key === 'Enter') adminMfaSubmit.click();
+});
+adminMfaEnrollCode.addEventListener('keydown', function (event) {
+  if (event.key === 'Enter') adminMfaEnrollSubmit.click();
+});
 
 /* Allow Enter key to submit login */
 
@@ -772,6 +1014,10 @@ adminLogoutBtn.addEventListener('click', async function () {
 
   adminDashboard.classList.remove('open');
   adminLoginScreen.classList.remove('open');
+  adminMfaScreen.classList.remove('open');
+  adminMfaEnrollScreen.classList.remove('open');
+  currentMfaFactorId = null;
+  adminMfaQr.replaceChildren();
 
   adminUserInput.value = '';
   adminPassInput.value = '';
@@ -851,14 +1097,15 @@ adminLogoutBtn.addEventListener('click', async function () {
     var condition = document.getElementById('pCondition').value.trim() || '—';
     var description = document.getElementById('pDescription').value.trim() || 'No description yet';
     var startBid = Number(document.getElementById('pStartBid').value);
-    var increment = Number(document.getElementById('pIncrement').value) || 50;
-    var durationValue = Number(document.getElementById('pDurationValue').value) || 24;
+    var increment = Number(document.getElementById('pIncrement').value);
+    var durationValue = Number(document.getElementById('pDurationValue').value);
     var durationUnit = document.getElementById('pDurationUnit').value;
     var color = document.getElementById('pColor').value;
     var fileInput = document.getElementById('pImage');
     var errEl = document.getElementById('productFormErr');
 
-    if (!name || !startBid) { errEl.textContent = 'Give the piece a name and a starting bid.'; return; }
+    if (!name || !Number.isFinite(startBid) || startBid <= 0) { errEl.textContent = 'Give the piece a name and a positive starting bid.'; return; }
+    if (!Number.isFinite(increment) || increment <= 0 || !Number.isFinite(durationValue) || durationValue <= 0) { errEl.textContent = 'Increment and duration must be positive.'; return; }
     errEl.textContent = '';
 
     var ms = durationUnit === 'hours' ? durationValue * 3600000 : durationValue * 60000;
@@ -868,7 +1115,8 @@ adminLogoutBtn.addEventListener('click', async function () {
         var item = state.items.find(function (i) { return i.id === editingId; });
         if (item) {
           item.name = name; item.size = size; item.condition = condition;
-          item.description = description; item.increment = increment; item.color = color;
+          item.description = description; item.color = color;
+          if (item.status === 'not_started') item.increment = increment;
           if (imageData !== undefined) item.image = imageData;
           if (item.status === 'not_started') {
             item.startPrice = startBid;
@@ -923,7 +1171,7 @@ adminLogoutBtn.addEventListener('click', async function () {
 
   } catch (error) {
     console.error('Product image upload error:', error);
-    errEl.textContent = 'Image upload failed: ' + uploadResult.error.message;
+    errEl.textContent = 'Image upload failed: ' + (error.message || 'Please try again.');
   }
 
 } else {
