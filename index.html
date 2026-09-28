@@ -1,32 +1,6 @@
 <!DOCTYPE html>
-<!--
-  ============================================================
-  TRAHE TROVE — unified prototype (storefront + gated admin)
-  Local-testing phase: no domain, no hosting, no backend yet.
-
-  Auction lifecycle: NOT STARTED -> ACTIVE -> ENDED. Adding a product
-  never starts its clock — an admin must explicitly press "Start
-  Auction" (one product) or "Start All Auctions" (every pending one)
-  from the Auctions tab. This is intentional: it lets you upload an
-  entire ~65-piece drop, review it, and launch everything at once.
-
-  SECURITY REALITY CHECK (read this before testing):
-  The admin login below is a LOCAL DEVELOPMENT LOGIN ONLY. It is a
-  plain JavaScript comparison against a password sitting in this
-  file's own source code. Anyone who opens devtools or views source
-  can read that password, or simply call the dashboard's functions
-  directly and skip the login screen entirely — the login is a UI
-  gate, not a real security boundary. That's fine for testing alone
-  on your own machine. It must never be deployed to any public URL
-  as-is. Phase 2 replaces this block with real server-side auth
-  (e.g. Supabase Auth) that a visitor genuinely cannot bypass.
-
-  Likewise, "start timestamps" below are this browser's Date.now().
-  In production the database/server must own start/end time — not
-  the visitor's device clock — exactly as the schema.sql design and
-  the place_bid()/close-auction sketches assume.
-  ============================================================
--->
+<!-- Trahe Trove storefront and Supabase-backed admin UI. Database RLS and
+     server-side bid validation are required before public launch. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -181,7 +155,7 @@
 </main>
 
 <footer>
-  Prototype — bids and listings are stored only in this browser, for demo purposes. A live version needs a real server so every visitor sees the same bids, plus a payment integration.
+  Beta — auction bidding is not yet transaction-safe. Do not treat a bid confirmation as final until server-side bidding is enabled.
   <br>
   <button class="admin-link" id="openAdminLogin">Admin Login</button>
 </footer>
@@ -210,13 +184,7 @@
     <button class="back-link" id="adminLoginBack">← Back to store</button>
     <div class="admin-card">
       <h2>Admin Login</h2>
-      <div class="dev-warning">
-        ⚠ LOCAL DEVELOPMENT LOGIN ONLY. This check runs entirely in your
-        browser — the password lives in this file's own source code, so
-        it is not secure and must never be used on a public or deployed
-        site. It exists only so you can test the dashboard locally.
-        Phase 2 replaces this with real server-side auth.
-      </div>
+      <div class="dev-warning">Admin sign-in uses Supabase Auth and an authenticator code. Database row-level security must also enforce admin access.</div>
       <label for="adminUserInput">Email</label>
       <input id="adminUserInput" type="text" autocomplete="username">
       <label for="adminPassInput">Password</label>
@@ -227,6 +195,85 @@
   </div>
 </div>
 
+  <!-- Admin MFA enrollment -->
+<div class="admin-screen" id="adminMfaEnrollScreen">
+  <div class="admin-wrap">
+    <div class="admin-card">
+      <h2>Set Up Two-Factor Authentication</h2>
+
+      <p>
+        Scan the QR code below using Google
+        Authenticator or Microsoft Authenticator.
+      </p>
+
+      <div id="adminMfaQr"></div>
+
+      <p>
+        Enter the six-digit code from your
+        authenticator app to finish setup.
+      </p>
+
+      <label for="adminMfaEnrollCode">
+        Authentication Code
+      </label>
+
+      <input
+        id="adminMfaEnrollCode"
+        type="text"
+        inputmode="numeric"
+        autocomplete="one-time-code"
+        maxlength="6"
+        placeholder="000000"
+      >
+
+      <div class="err" id="adminMfaEnrollErr"></div>
+
+      <button
+        class="submit"
+        id="adminMfaEnrollSubmit"
+        type="button"
+      >
+        Activate Two-Factor Authentication
+      </button>
+    </div>
+  </div>
+</div>
+  <!-- Admin two-factor authentication -->
+<div class="admin-screen" id="adminMfaScreen">
+  <div class="admin-wrap">
+    <div class="admin-card">
+      <h2>Two-Factor Authentication</h2>
+
+      <p>
+        Enter the 6-digit code from your
+        authenticator app.
+      </p>
+
+      <label for="adminMfaCode">
+        Authentication Code
+      </label>
+
+      <input
+        id="adminMfaCode"
+        type="text"
+        inputmode="numeric"
+        autocomplete="one-time-code"
+        maxlength="6"
+        placeholder="000000"
+      >
+
+      <div class="err" id="adminMfaErr"></div>
+
+      <button
+        class="submit"
+        id="adminMfaSubmit"
+        type="button"
+      >
+        Verify Code
+      </button>
+    </div>
+  </div>
+</div>
 <!-- admin dashboard -->
 <div class="admin-screen" id="adminDashboard">
   <div class="dash-wrap">
@@ -342,7 +389,7 @@
 
     <!-- PROOF & WAYBILL -->
     <div class="tab-panel" id="panel-proof">
-      <p class="field-note">Upload shipment evidence here. These images are displayed publicly in the PROOF section. In this prototype they are stored in this browser's localStorage, so a future live version should move them to server/cloud storage.</p>
+      <p class="field-note">Upload shipment evidence here. These images are displayed publicly in the PROOF section. Images are uploaded to Supabase Storage; this gallery's metadata is still cached in this browser. Configure storage policies and server-side expiry before launch.</p>
       <div class="form-grid proof-admin-grid">
         <div class="info-card">
           <h3>WAYBILLS</h3>
