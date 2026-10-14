@@ -841,6 +841,31 @@ tag.appendChild(btn);
     return;
   }
 
+
+  // Verify Facebook authentication before submitting a bid.
+  var authResult = await supabaseClient.auth.getUser();
+
+  if (authResult.error || !authResult.data.user) {
+    document.getElementById('modalErr').textContent =
+      'Please log in with Facebook before placing a bid.';
+    return;
+  }
+
+  var identityResult =
+    await supabaseClient.auth.getUserIdentities();
+
+  if (
+    identityResult.error ||
+    !identityResult.data?.identities?.some(function (identity) {
+      return identity.provider === 'facebook';
+    })
+  ) {
+    document.getElementById('modalErr').textContent =
+      'Please log in with Facebook before placing a bid.';
+    return;
+  }
+
+
   var turnstileToken = window.turnstile?.getResponse();
 
   if (!turnstileToken) {
