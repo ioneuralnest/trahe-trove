@@ -12,6 +12,111 @@
   SUPABASE_PUBLISHABLE_KEY
 );
 
+console.log(
+  'Supabase key type:',
+  SUPABASE_PUBLISHABLE_KEY.startsWith('sb_publishable_')
+    ? 'Modern publishable key'
+    : SUPABASE_PUBLISHABLE_KEY.startsWith('eyJ')
+    ? 'Legacy JWT-style key'
+    : 'Unknown key format'
+);
+
+supabaseClient.auth.getSession().then(({ data, error }) => {
+  console.log(
+    'Supabase session:',
+    error ? 'Error' : data.session ? 'Authenticated' : 'Anonymous'
+  );
+});
+
+  // ============================================================
+  // CUSTOMER FACEBOOK LOGIN
+  // ============================================================
+
+  async function signInWithFacebook() {
+    var redirectTo =
+      window.location.origin + window.location.pathname;
+
+    var result = await supabaseClient.auth.signInWithOAuth({
+      provider: 'facebook',
+      options: {
+        redirectTo: redirectTo
+      }
+    });
+
+    if (result.error) {
+      console.error('Facebook sign-in failed:', result.error);
+      showToast('Facebook sign-in failed. Please try again.');
+    }
+  }
+
+  function updateCustomerAuthUI(session) {
+    var loginBtn = document.getElementById('facebookLoginBtn');
+    var logoutBtn = document.getElementById('facebookLogoutBtn');
+    var customerName = document.getElementById('customerName');
+
+    if (!loginBtn || !logoutBtn || !customerName) return;
+
+    if (session && session.user) {
+      var user = session.user;
+
+      var name =
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        user.user_metadata?.user_name ||
+        user.email ||
+        'Facebook customer';
+
+      customerName.textContent = 'Hi, ' + name;
+      customerName.hidden = false;
+
+      loginBtn.hidden = true;
+      logoutBtn.hidden = false;
+    } else {
+      customerName.textContent = '';
+      customerName.hidden = true;
+
+      loginBtn.hidden = false;
+      logoutBtn.hidden = true;
+    }
+  }
+
+  var facebookLoginBtn =
+    document.getElementById('facebookLoginBtn');
+
+  var facebookLogoutBtn =
+    document.getElementById('facebookLogoutBtn');
+
+  if (facebookLoginBtn) {
+    facebookLoginBtn.addEventListener('click', signInWithFacebook);
+  }
+
+  if (facebookLogoutBtn) {
+    facebookLogoutBtn.addEventListener('click', async function () {
+      var result = await supabaseClient.auth.signOut();
+
+      if (result.error) {
+        console.error('Facebook logout failed:', result.error);
+        showToast('Could not log out. Please try again.');
+        return;
+      }
+
+      updateCustomerAuthUI(null);
+    });
+  }
+
+  supabaseClient.auth.onAuthStateChange(function (event, session) {
+    updateCustomerAuthUI(session);
+  });
+
+  supabaseClient.auth.getSession().then(function (result) {
+    if (result.error) {
+      console.error('Could not load customer session:', result.error);
+      return;
+    }
+
+    updateCustomerAuthUI(result.data.session);
+  });
+
 supabaseClient.auth.getSession().then(function (result) {
   if (result.error) {
     console.error('Supabase connection failed:', result.error);
@@ -24,7 +129,11 @@ supabaseClient.auth.getSession().then(function (result) {
 
   var STORAGE_KEY = 'trahe_trove_state_v1';
   var DEFAULT_DURATION_MS = 24 * 3600000;
-  var state = { items: [], dropName: 'September Hoodie Drop' };
+  var state = {
+  items: [],
+  adminOrders: [],
+  dropName: 'September Hoodie Drop'
+};
   var PROOF_STORAGE_KEY = 'trahe_trove_proof_v1';
   var WAYBILL_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
   var WAYBILL_DELETE_DATE_KEY = 'trahe_trove_waybill_delete_date_v1';
@@ -67,8 +176,9 @@ supabaseClient.auth.getSession().then(function (result) {
       startsAt: row.starts_at ? new Date(row.starts_at).getTime() : null,
       endsAt: row.ends_at ? new Date(row.ends_at).getTime() : null,
       currentBid: row.current_bid == null
-        ? Number(row.start_price)
-        : Number(row.current_bid),
+  ? Number(row.start_price)
+  : Number(row.current_bid),
+bidCount: Number(row.bid_count) || 0,
       bidderName: row.bidder_name,
       bidderPhone: row.bidder_phone,
       paid: !!row.paid
@@ -102,15 +212,128 @@ supabaseClient.auth.getSession().then(function (result) {
     };
   }
 
-  async function load() {
+  function itemToProductEdit(item) {
+  var row = {
+    name: item.name,
+    size: item.size || '—',
+    condition: item.condition || '—',
+    description: item.description || 'No description yet',
+    color: item.color || null,
+    image_url: item.image || null
+  };
+
+  // Only include auction settings before the auction starts.
+  if (item.status === 'not_started') {
+    row.start_price = item.startPrice;
+    row.increment = item.increment;
+    row.duration_ms = item.durationMs;
+    row.current_bid = item.currentBid;
+  }
+
+  return row;
+}
+
+async function updateProductDetails(item) {
+  if (!(await checkAdminSession())) {
+    throw new Error('Admin MFA verification required.');
+  }
+
+  var query = supabaseClient
+    .from('products')
+    .update(itemToProductEdit(item))
+    .eq('id', item.id);
+
+  // Auction settings must never overwrite an auction
+  // that has already started in another browser tab.
+  if (item.status === 'not_started') {
+    query = query.eq('status', 'not_started');
+  }
+
+  var result = await query.select('id');
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (!result.data || result.data.length !== 1) {
+    throw new Error(
+      'Product update was not confirmed. The auction may have started in another tab. Refresh and try again.'
+    );
+  }
+
+  return result.data[0];
+}
+
+async function createProduct(item) {
+
+  if (!(await checkAdminSession())) {
+  throw new Error('Admin MFA verification required.');
+}
+  var row = {
+    id: item.id,
+    name: item.name,
+    size: item.size,
+    condition: item.condition,
+    description: item.description,
+    color: item.color,
+    image_url: item.image,
+    start_price: item.startPrice,
+    increment: item.increment,
+    duration_ms: item.durationMs,
+    status: 'not_started',
+    starts_at: null,
+    ends_at: null,
+    current_bid: item.startPrice,
+    bid_count: 0,
+    drop_name: state.dropName || 'September Hoodie Drop'
+  };
+
+  var result = await supabaseClient
+    .from('products')
+    .insert(row)
+    .select('id');
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (!result.data || result.data.length !== 1) {
+    throw new Error('Product creation was not confirmed.');
+  }
+
+  return result.data[0];
+}
+
+  async function load(requireFresh = false) {
     try {
       var result = await supabaseClient
         .from('products')
-        .select('*')
+        .select(`
+  id,
+  name,
+  size,
+  condition,
+  description,
+  color,
+  image_url,
+  start_price,
+  increment,
+  duration_ms,
+  status,
+  starts_at,
+  ends_at,
+  current_bid,
+  bid_count,
+  drop_name,
+  created_at
+`)
         .order('created_at', { ascending: true });
 
       if (result.error) {
         console.error('Supabase product load failed:', result.error);
+        if (requireFresh) {
+  throw result.error;
+}
 
         // Temporary fallback so the site does not become blank
         // if the database is unavailable.
@@ -142,6 +365,9 @@ supabaseClient.auth.getSession().then(function (result) {
 
     } catch (e) {
       console.error('Supabase load error:', e);
+      if (requireFresh) {
+  throw e;
+}
 
       var fallback = localStorage.getItem(STORAGE_KEY);
 
@@ -157,32 +383,27 @@ supabaseClient.auth.getSession().then(function (result) {
   }
 
   function save() {
-    // Keep a local backup while we transition away from localStorage.
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch (e) {}
-
-    // Send the current products to Supabase.
-    var rows = state.items.map(itemToDb);
-
-    if (!rows.length) {
-      return;
-    }
-
-    supabaseClient
-      .from('products')
-      .upsert(rows, { onConflict: 'id' })
-      .then(function (result) {
-        if (result.error) {
-          console.error('Supabase product save failed:', result.error);
-        } else {
-          console.log('✅ Products saved to Supabase.');
-        }
-      })
-      .catch(function (error) {
-        console.error('Supabase save error:', error);
-      });
+  // Local backup only.
+  // Database changes must use dedicated, awaited Supabase operations.
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (error) {
+    console.warn('Local backup failed:', error);
   }
+}
+
+async function updateDropName(dropName) {
+  if (!(await checkAdminSession())) {
+    throw new Error('Admin MFA verification required.');
+  }
+
+  const { error } = await supabaseClient
+    .from('products')
+    .update({ drop_name: dropName })
+    .not('id', 'is', null);
+
+  if (error) throw error;
+}
 
   function localDateTimeEnd(dateString) {
     if (!dateString) return null;
@@ -471,10 +692,7 @@ proofState[type].unshift({
     var now = Date.now();
     board.innerHTML = '';
     state.items.forEach(function (item) {
-      if (item.status === 'active' && item.endsAt - now <= 0) {
-        item.status = 'ended';
-        save();
-      }
+
       if (item.status === 'active') liveCount++;
 
       var tag = document.createElement('div');
@@ -508,7 +726,7 @@ proofState[type].unshift({
       var bidRow = document.createElement('div');
       bidRow.className = 'bid-row';
       var left = document.createElement('div');
-      left.innerHTML = '<div class="bid-label">' + (item.bidderName ? 'current top bid' : 'starting bid') + '</div><div class="bid-amount">' + peso(item.currentBid) + '</div>';
+      left.innerHTML = '<div class="bid-label">' + (item.bidCount > 0 ? 'current top bid' : 'starting bid') + '</div><div class="bid-amount">' + peso(item.currentBid) + '</div>';
       var right = document.createElement('div');
       right.className = 'timer';
       if (item.status === 'active') { right.textContent = 'LIVE · ' + fmtTime(item.endsAt - now); }
@@ -519,29 +737,33 @@ proofState[type].unshift({
       tag.appendChild(bidRow);
 
       if (item.status === 'ended') {
-        var wl = document.createElement('div');
-        wl.className = 'winner-line';
-        if (item.bidderName) {
-          wl.innerHTML = 'Won by <b>' + escapeHtml(item.bidderName) + '</b> at ' + peso(item.currentBid) + '.<br>' +
-            (item.paid
-              ? '<span class="paid-flag">Payment received ✓</span>'
-              : "We'll send a GCash/Maya payment request within 24h.");
-        } else {
-          wl.textContent = 'No bids came in before time ran out.';
-        }
-        tag.appendChild(wl);
-      } else if (item.status === 'not_started') {
+  var wl = document.createElement('div');
+  wl.className = 'winner-line';
+
+  if (item.bidCount > 0) {
+    wl.textContent =
+      'Auction ended · Winning bid: ' +
+      peso(item.currentBid) + '.';
+  } else {
+    wl.textContent =
+      'No bids came in before time ran out.';
+  }
+
+  tag.appendChild(wl);
+} else if (item.status === 'not_started') {
         var comingBtn = document.createElement('button');
         comingBtn.className = 'bid-btn';
         comingBtn.disabled = true;
         comingBtn.textContent = 'Coming soon';
         tag.appendChild(comingBtn);
       } else {
-        var btn = document.createElement('button');
-        btn.className = 'bid-btn';
-        btn.textContent = 'Place bid';
-        btn.addEventListener('click', function () { openBidModal(item.id); });
-        tag.appendChild(btn);
+       var btn = document.createElement('button');
+btn.className = 'bid-btn';
+btn.textContent = 'Place Bid';
+btn.addEventListener('click', function () {
+  openBidModal(item.id);
+});
+tag.appendChild(btn);
       }
 
       board.appendChild(tag);
@@ -553,9 +775,28 @@ proofState[type].unshift({
   var overlay = document.getElementById('bidOverlay');
   var activeItemId = null;
 
-  function openBidModal(id) {
+  // Verify the current user against Supabase Auth, not just a cached session.
+  async function getFacebookBidder() {
+    var result = await supabaseClient.auth.getUser();
+    if (result.error || !result.data || !result.data.user) return null;
+    var user = result.data.user;
+    if (!(user.identities || []).some(function (identity) {
+      return identity.provider === 'facebook';
+    })) return null;
+    return user;
+  }
+
+  async function openBidModal(id) {
     var item = state.items.find(function (i) { return i.id === id; });
     if (!item || item.status !== 'active') return;
+
+    var bidder = await getFacebookBidder();
+    if (!bidder) {
+      showToast('Log in with Facebook to place a bid.');
+      if (facebookLoginBtn) facebookLoginBtn.focus();
+      return;
+    }
+
     activeItemId = id;
     document.getElementById('modalItemName').textContent = item.name;
     document.getElementById('modalItemSub').textContent = 'Size ' + item.size + ' — ' + item.description;
@@ -564,71 +805,131 @@ proofState[type].unshift({
     document.getElementById('modalMinBid').textContent = peso(minNext);
     document.getElementById('bidAmount').value = minNext;
     document.getElementById('bidAmount').min = minNext;
-    document.getElementById('bidName').value = '';
-    document.getElementById('bidPhone').value = '';
     document.getElementById('modalErr').textContent = '';
     overlay.classList.add('open');
-    document.getElementById('bidName').focus();
+    if (window.turnstile) window.turnstile.reset();
   }
   function closeBidModal() { overlay.classList.remove('open'); activeItemId = null; }
 
   document.getElementById('closeModal').addEventListener('click', closeBidModal);
   overlay.addEventListener('click', function (e) { if (e.target === overlay) closeBidModal(); });
 
-  // CLIENT-SIDE VALIDATION ONLY — this increment/amount check is a
-  // convenience for the visitor, not a security boundary. Anyone with
-  // devtools open can currently call save() directly with any values.
-  // Phase 2 moves the authoritative check into a server-side function
-  // (place_bid RPC in schema.sql) that runs inside a database
-  // transaction, so this exact race — two people bidding within the
-  // same second — can't corrupt the auction.
-  document.getElementById('submitBid').addEventListener('click', function () {
-    var item = state.items.find(function (i) { return i.id === activeItemId; });
-    if (!item) return;
-    var name = document.getElementById('bidName').value.trim();
-    var phone = document.getElementById('bidPhone').value.trim();
-    var amount = Number(document.getElementById('bidAmount').value);
-    var minNext = item.currentBid + item.increment;
-    var errEl = document.getElementById('modalErr');
-
-    if (!name) { errEl.textContent = 'Enter your name.'; return; }
-    if (!phone) { errEl.textContent = 'Enter a GCash or Maya number to bid with.'; return; }
-    if (!amount || amount < minNext) { errEl.textContent = 'Bid must be at least ' + peso(minNext) + '.'; return; }
-    if (item.status !== 'active' || item.endsAt - Date.now() <= 0) {
-      errEl.textContent = 'This auction is not open for bidding.';
-      renderAll();
-      closeBidModal();
-      return;
-    }
-
-    item.currentBid = amount;
-    item.bidderName = name;
-    item.bidderPhone = phone;
-    save();
-    renderAll();
-    closeBidModal();
-    showToast("You're the top bid on \"" + item.name + '" at ' + peso(amount) + '.');
+  document.getElementById('submitBid').addEventListener('click', async function () {
+  var item = state.items.find(function (i) {
+    return i.id === activeItemId;
   });
 
-  // ============================================================
-  // ADMIN — login gate + dashboard.
-  // Everything in this section is reachable ONLY through the small
-  // "Admin Login" link in the footer. Nothing on the public storefront
-  // links to it, and there is no "Add product" control anywhere outside
-  // this gated area.
-  // ============================================================
+  if (!item) {
+    console.error('No active auction item.');
+    return;
+  }
 
-  // ------------------------------------------------------------
-  // LOCAL DEVELOPMENT LOGIN ONLY — NOT REAL AUTHENTICATION.
-  // This is a plain client-side string comparison. The "password"
-  // below sits in this file's own source, so anyone who views source
-  // or opens devtools can read it — or just call showAdminDashboard()
-  // directly from the console and skip the login screen entirely.
-  // There is no real security here. This exists purely so you can
-  // click through the Admin Dashboard while testing on your own
-  // machine. Phase 2 replaces this whole block with real server-side
-  // auth (e.g. Supabase Auth) that a public visitor cannot bypass.
-  // ------------------------------------------------------------
+  // Check again immediately before submission; the session may have expired.
+  if (!(await getFacebookBidder())) {
+    document.getElementById('modalErr').textContent =
+      'Your Facebook session has expired. Please log in again.';
+    return;
+  }
+
+  var turnstileToken = window.turnstile?.getResponse();
+
+  if (!turnstileToken) {
+    document.getElementById('modalErr').textContent =
+      'Please complete the security verification.';
+    return;
+  }
+
+  var amount = Number(
+    document.getElementById('bidAmount').value
+  );
+
+  var minNext = item.currentBid + item.increment;
+
+  var errEl = document.getElementById('modalErr');
+  var submitBtn = document.getElementById('submitBid');
+
+  errEl.textContent = '';
+
+  if (!Number.isSafeInteger(amount) || amount < minNext) {
+    errEl.textContent =
+      'Bid must be at least ' + peso(minNext) + '.';
+    return;
+  }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Submitting...';
+
+  try {
+    var result = await supabaseClient.functions.invoke(
+      'submit-bid',
+      {
+        body: {
+          turnstileToken: turnstileToken,
+          productId: item.id,
+          amount: amount
+        }
+      }
+    );
+
+    if (result.error) {
+      var message =
+        'Could not place your bid. Please try again.';
+
+      if (result.error.context) {
+        try {
+          var errorBody =
+            await result.error.context.json();
+
+          if (typeof errorBody.error === 'string') {
+            message = errorBody.error;
+          }
+        } catch (parseError) {
+          console.warn(
+            'Could not read bid error response.'
+          );
+        }
+      }
+
+      throw new Error(message);
+    }
+
+    if (
+      !result.data ||
+      result.data.message !== 'Bid placed successfully'
+    ) {
+      throw new Error(
+        'Bid confirmation was invalid. Please refresh the auction.'
+      );
+    }
+
+    console.log('Bid accepted:', result.data);
+
+    await load(true);
+    renderAll();
+
+    closeBidModal();
+
+    showToast(
+      'Your bid of ' +
+        peso(amount) +
+        ' on "' +
+        item.name +
+        '" was accepted.'
+    );
+
+  } catch (error) {
+    console.error('Bid failed:', error);
+
+    errEl.textContent =
+      error.message ||
+      'Could not place your bid. Please try again.';
+
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Submit Bid';
+  }
+});
+
   var ADMIN_EMAIL = 'ioneuralnest@gmail.com';
 
 var adminLoginScreen = document.getElementById('adminLoginScreen');
@@ -640,9 +941,43 @@ var adminLoginErr = document.getElementById('adminLoginErr');
 var adminUserInput = document.getElementById('adminUserInput');
 var adminPassInput = document.getElementById('adminPassInput');
 
+  // MFA verification screen
+var adminMfaScreen =
+  document.getElementById('adminMfaScreen');
+
+var adminMfaCode =
+  document.getElementById('adminMfaCode');
+
+var adminMfaErr =
+  document.getElementById('adminMfaErr');
+
+var adminMfaSubmit =
+  document.getElementById('adminMfaSubmit');
+
+// MFA enrollment screen
+var adminMfaEnrollScreen =
+  document.getElementById('adminMfaEnrollScreen');
+
+var adminMfaQr =
+  document.getElementById('adminMfaQr');
+
+var adminMfaEnrollCode =
+  document.getElementById('adminMfaEnrollCode');
+
+var adminMfaEnrollErr =
+  document.getElementById('adminMfaEnrollErr');
+
+var adminMfaEnrollSubmit =
+  document.getElementById('adminMfaEnrollSubmit');
+
+// Stores the current MFA factor during verification
+var currentMfaFactorId = null;
+
 function showAdminLogin() {
   adminLoginScreen.classList.add('open');
   adminDashboard.classList.remove('open');
+  adminMfaScreen.classList.remove('open');
+  adminMfaEnrollScreen.classList.remove('open');
 
   adminLoginErr.textContent = '';
   adminPassInput.value = '';
@@ -654,25 +989,35 @@ function showAdminDashboard() {
 
   adminLoginErr.textContent = '';
 
-  // Refresh the admin dashboard using the existing functions.
-  renderAll();
+  loadAdminProducts().catch(function (error) {
+    console.error('Failed to load admin products:', error);
+    alert(
+      'Could not load admin products. Please check your session and try again.'
+    );
+  });
+
+  loadAdminOrders().catch(function (error) {
+    console.error('Failed to load admin orders:', error);
+
+    var errEl = document.getElementById('ordersErr');
+
+    if (errEl) {
+      errEl.textContent =
+        'Could not load orders. Please refresh and try again.';
+    }
+  });
 }
 
 async function checkAdminSession() {
-  var result = await supabaseClient.auth.getSession();
+  var result = await supabaseClient.auth.getUser();
 
-  if (result.error) {
-    console.error('Could not check Supabase session:', result.error);
+  if (result.error || !result.data.user) {
     return false;
   }
 
-  var session = result.data.session;
+  var user = result.data.user;
 
-  if (!session || !session.user) {
-    return false;
-  }
-
-  var email = (session.user.email || '').toLowerCase().trim();
+  var email = (user.email || '').toLowerCase().trim();
   var allowedEmail = ADMIN_EMAIL.toLowerCase().trim();
 
   if (email !== allowedEmail) {
@@ -680,9 +1025,118 @@ async function checkAdminSession() {
     return false;
   }
 
-  return true;
+  // Require completed MFA verification.
+  var aalResult =
+    await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+  if (aalResult.error) {
+    console.error('MFA check failed:', aalResult.error);
+    return false;
+  }
+
+  return aalResult.data.currentLevel === 'aal2';
 }
 
+async function loadAdminProducts() {
+  if (!(await checkAdminSession())) {
+    throw new Error('Admin MFA verification required.');
+  }
+
+  const { data, error } = await supabaseClient
+  .rpc('get_admin_products');
+
+  if (error) {
+    throw error;
+  }
+
+  state.items = (data || []).map(dbToItem);
+  renderAll();
+}
+
+async function loadAdminOrders() {
+  if (!(await checkAdminSession())) {
+    throw new Error('Admin MFA verification required.');
+  }
+
+  var result = await supabaseClient
+    .rpc('get_admin_orders');
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  renderAdminOrders(result.data || []);
+}
+
+function renderAdminOrders(orders) {
+  var el = document.getElementById('adminOrdersList');
+  var errEl = document.getElementById('ordersErr');
+
+  if (!el) return;
+
+  if (errEl) {
+    errEl.textContent = '';
+  }
+
+  if (!orders || !orders.length) {
+    el.innerHTML =
+      '<div class="placeholder-note">' +
+      'No orders yet. When an auction ends with a valid Facebook customer, ' +
+      'the winning order will appear here.' +
+      '</div>';
+    return;
+  }
+
+  el.innerHTML = orders.map(function (order) {
+    var created = order.created_at
+      ? new Date(order.created_at).toLocaleString()
+      : '—';
+
+    var status = order.status || 'pending';
+
+    return (
+      '<article class="admin-order-card">' +
+
+        '<div class="admin-order-main">' +
+          '<h3>' +
+            escapeHtml(order.product_name || 'Unnamed product') +
+          '</h3>' +
+
+          '<div class="admin-order-meta">' +
+            '<span>Size: <b>' +
+              escapeHtml(order.product_size || '—') +
+            '</b></span>' +
+
+            '<span>Winning bid: <b>' +
+              peso(Number(order.winning_bid || 0)) +
+            '</b></span>' +
+
+            '<span>Status: <b>' +
+              escapeHtml(status) +
+            '</b></span>' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="admin-order-buyer">' +
+          '<strong>Customer</strong>' +
+
+          '<div>' +
+            escapeHtml(order.buyer_name || 'Facebook customer') +
+          '</div>' +
+
+          '<div class="field-note">' +
+            escapeHtml(order.buyer_email || 'Facebook account') +
+          '</div>' +
+        '</div>' +
+
+        '<div class="admin-order-date">' +
+          escapeHtml(created) +
+        '</div>' +
+
+      '</article>'
+    );
+  }).join('');
+}
 
 /* Open Admin Login */
 
@@ -738,7 +1192,41 @@ adminLoginSubmit.addEventListener('click', async function () {
       return;
     }
 
-    showAdminDashboard();
+    var aalResult =
+  await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+if (aalResult.error) {
+  adminLoginErr.textContent =
+    'Unable to verify account security.';
+  await supabaseClient.auth.signOut();
+  return;
+}
+
+if (aalResult.data.currentLevel === 'aal2') {
+  showAdminDashboard();
+
+} else if (aalResult.data.nextLevel === 'aal2') {
+  // MFA is enrolled but verification is required.
+  var factorsResult =
+    await supabaseClient.auth.mfa.listFactors();
+
+  if (factorsResult.error) {
+    throw factorsResult.error;
+  }
+
+  var totpFactor = factorsResult.data.totp[0];
+
+  if (!totpFactor) {
+    throw new Error('No verified authenticator found.');
+  }
+
+  currentMfaFactorId = totpFactor.id;
+  showAdminMfaScreen();
+
+} else {
+  // No MFA enrolled yet.
+  await startAdminMfaEnrollment();
+}
 
   } catch (error) {
     console.error('Unexpected login error:', error);
@@ -747,8 +1235,178 @@ adminLoginSubmit.addEventListener('click', async function () {
     adminLoginSubmit.disabled = false;
     adminLoginSubmit.textContent = 'Log In';
   }
+}); // End login handler; MFA listeners must be registered at startup.
+
+function showAdminMfaScreen() {
+  adminLoginScreen.classList.remove('open');
+  adminDashboard.classList.remove('open');
+  adminMfaEnrollScreen.classList.remove('open');
+
+  adminMfaScreen.classList.add('open');
+
+  adminMfaErr.textContent = '';
+  adminMfaCode.value = '';
+}
+
+function showAdminMfaEnrollScreen() {
+  adminLoginScreen.classList.remove('open');
+  adminDashboard.classList.remove('open');
+  adminMfaScreen.classList.remove('open');
+
+  adminMfaEnrollScreen.classList.add('open');
+
+  adminMfaEnrollErr.textContent = '';
+  adminMfaEnrollCode.value = '';
+}
+  async function startAdminMfaEnrollment() {
+  try {
+    var result = await supabaseClient.auth.mfa.enroll({
+      factorType: 'totp',
+      friendlyName: 'Trahe Trove Admin'
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    currentMfaFactorId = result.data.id;
+
+    // Display the QR code supplied by Supabase.
+    var qrImage = document.createElement('img');
+    qrImage.src = result.data.totp.qr_code;
+    qrImage.alt = 'Authenticator setup QR code';
+    qrImage.style.maxWidth = '220px';
+    qrImage.style.width = '100%';
+
+    adminMfaQr.replaceChildren(qrImage);
+
+    showAdminMfaEnrollScreen();
+
+  } catch (error) {
+    console.error('MFA enrollment failed:', error);
+
+    adminLoginErr.textContent =
+      'Could not start two-factor authentication setup.';
+  }
+}
+  adminMfaSubmit.addEventListener('click', async function () {
+  var code = adminMfaCode.value.trim();
+
+  adminMfaErr.textContent = '';
+
+  if (!/^\d{6}$/.test(code)) {
+    adminMfaErr.textContent =
+      'Please enter a valid 6-digit code.';
+    return;
+  }
+
+  if (!currentMfaFactorId) {
+    adminMfaErr.textContent =
+      'Please sign in again.';
+    return;
+  }
+
+  adminMfaSubmit.disabled = true;
+  adminMfaSubmit.textContent = 'Verifying...';
+
+  try {
+    var result =
+      await supabaseClient.auth.mfa.challengeAndVerify({
+        factorId: currentMfaFactorId,
+        code: code
+      });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    var aalResult =
+      await supabaseClient.auth.mfa
+        .getAuthenticatorAssuranceLevel();
+
+    if (
+      aalResult.error ||
+      aalResult.data.currentLevel !== 'aal2'
+    ) {
+      throw new Error('MFA verification failed.');
+    }
+
+    currentMfaFactorId = null;
+    adminMfaCode.value = '';
+
+    adminMfaScreen.classList.remove('open');
+    showAdminDashboard();
+
+  } catch (error) {
+    console.error('MFA verification failed:', error);
+
+    adminMfaErr.textContent =
+      'Invalid or expired code. Please try again.';
+
+  } finally {
+    adminMfaSubmit.disabled = false;
+    adminMfaSubmit.textContent = 'Verify Code';
+  }
+});
+  adminMfaEnrollSubmit.addEventListener('click', async function () {
+  var code = adminMfaEnrollCode.value.trim();
+
+  adminMfaEnrollErr.textContent = '';
+
+  if (!/^\d{6}$/.test(code)) {
+    adminMfaEnrollErr.textContent =
+      'Please enter a valid 6-digit code.';
+    return;
+  }
+
+  if (!currentMfaFactorId) {
+    adminMfaEnrollErr.textContent =
+      'Please restart MFA setup.';
+    return;
+  }
+
+  adminMfaEnrollSubmit.disabled = true;
+
+  try {
+    var result = await supabaseClient.auth.mfa.challengeAndVerify({
+      factorId: currentMfaFactorId,
+      code: code
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    var aalResult =
+      await supabaseClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+    if (aalResult.error ||
+        aalResult.data.currentLevel !== 'aal2') {
+      throw new Error('MFA verification was not completed.');
+    }
+
+    currentMfaFactorId = null;
+    adminMfaQr.replaceChildren();
+    adminMfaEnrollCode.value = '';
+
+    adminMfaEnrollScreen.classList.remove('open');
+    showAdminDashboard();
+
+  } catch (error) {
+    console.error('MFA activation failed:', error);
+    adminMfaEnrollErr.textContent =
+      'Invalid code or verification failed. Please try again.';
+  } finally {
+    adminMfaEnrollSubmit.disabled = false;
+  }
 });
 
+adminMfaCode.addEventListener('keydown', function (event) {
+  if (event.key === 'Enter') adminMfaSubmit.click();
+});
+adminMfaEnrollCode.addEventListener('keydown', function (event) {
+  if (event.key === 'Enter') adminMfaEnrollSubmit.click();
+});
 
 /* Allow Enter key to submit login */
 
@@ -772,6 +1430,10 @@ adminLogoutBtn.addEventListener('click', async function () {
 
   adminDashboard.classList.remove('open');
   adminLoginScreen.classList.remove('open');
+  adminMfaScreen.classList.remove('open');
+  adminMfaEnrollScreen.classList.remove('open');
+  currentMfaFactorId = null;
+  adminMfaQr.replaceChildren();
 
   adminUserInput.value = '';
   adminPassInput.value = '';
@@ -783,9 +1445,53 @@ adminLogoutBtn.addEventListener('click', async function () {
       document.querySelectorAll('.tab-btn').forEach(function (b) { b.classList.remove('active'); });
       document.querySelectorAll('.tab-panel').forEach(function (p) { p.classList.remove('active'); });
       btn.classList.add('active');
-      document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+
+var panel = document.getElementById(
+  'panel-' + btn.dataset.tab
+);
+
+panel.classList.add('active');
+
+if (btn.dataset.tab === 'orders') {
+  loadAdminOrders().catch(function (error) {
+    console.error('Order load failed:', error);
+
+    var errEl = document.getElementById('ordersErr');
+
+    if (errEl) {
+      errEl.textContent =
+        'Could not load orders. Please try again.';
+    }
+  });
+}
     });
   });
+
+  var refreshOrdersBtn =
+  document.getElementById('refreshOrdersBtn');
+
+if (refreshOrdersBtn) {
+  refreshOrdersBtn.addEventListener('click', function () {
+    refreshOrdersBtn.disabled = true;
+    refreshOrdersBtn.textContent = 'Refreshing...';
+
+    loadAdminOrders()
+      .catch(function (error) {
+        console.error('Order refresh failed:', error);
+
+        var errEl = document.getElementById('ordersErr');
+
+        if (errEl) {
+          errEl.textContent =
+            'Could not refresh orders. Please try again.';
+        }
+      })
+      .finally(function () {
+        refreshOrdersBtn.disabled = false;
+        refreshOrdersBtn.textContent = 'Refresh orders';
+      });
+  });
+}
 
   // ---------- proof & waybill uploads ----------
   loadProof();
@@ -800,10 +1506,26 @@ adminLogoutBtn.addEventListener('click', async function () {
 
   // ---------- drop name (lightweight stand-in for real multi-drop
   // management — see chat reply for the scoping note on this) ----------
-  document.getElementById('dropNameInput').addEventListener('input', function () {
-    state.dropName = this.value;
+  document.getElementById('dropNameInput').addEventListener('change', async function () {
+  var input = this;
+  var newDropName = input.value.trim();
+  var previousDropName = state.dropName;
+
+  input.disabled = true;
+
+  try {
+    await updateDropName(newDropName);
+    state.dropName = newDropName;
     save();
-  });
+    showToast('Drop name saved to Supabase.');
+  } catch (error) {
+    console.error('Drop name update failed:', error);
+    input.value = previousDropName;
+    showToast('Could not save drop name. Please try again.');
+  } finally {
+    input.disabled = false;
+  }
+});
 
   // ---------- product form (add + edit) ----------
   document.getElementById('pImage').addEventListener('change', function () {
@@ -845,56 +1567,155 @@ adminLogoutBtn.addEventListener('click', async function () {
   }
   document.getElementById('productFormCancel').addEventListener('click', resetProductForm);
 
+  var productSaveInProgress = false;
   document.getElementById('productFormSubmit').addEventListener('click', async function () {
     var name = document.getElementById('pName').value.trim();
     var size = document.getElementById('pSize').value.trim() || '—';
     var condition = document.getElementById('pCondition').value.trim() || '—';
     var description = document.getElementById('pDescription').value.trim() || 'No description yet';
     var startBid = Number(document.getElementById('pStartBid').value);
-    var increment = Number(document.getElementById('pIncrement').value) || 50;
-    var durationValue = Number(document.getElementById('pDurationValue').value) || 24;
+    var increment = Number(document.getElementById('pIncrement').value);
+    var durationValue = Number(document.getElementById('pDurationValue').value);
     var durationUnit = document.getElementById('pDurationUnit').value;
     var color = document.getElementById('pColor').value;
     var fileInput = document.getElementById('pImage');
     var errEl = document.getElementById('productFormErr');
+    if (productSaveInProgress) {
+  return;
+}
 
-    if (!name || !startBid) { errEl.textContent = 'Give the piece a name and a starting bid.'; return; }
+productSaveInProgress = true;
+
+var productSubmitBtn = document.getElementById('productFormSubmit');
+productSubmitBtn.disabled = true;
+
+    if (!name || !Number.isFinite(startBid) || startBid <= 0) {
+  errEl.textContent = 'Give the piece a name and a positive starting bid.';
+  productSaveInProgress = false;
+  productSubmitBtn.disabled = false;
+  return;
+}
+
+if (
+  !Number.isFinite(increment) ||
+  increment <= 0 ||
+  !Number.isFinite(durationValue) ||
+  durationValue <= 0
+) {
+  errEl.textContent = 'Increment and duration must be positive.';
+  productSaveInProgress = false;
+  productSubmitBtn.disabled = false;
+  return;
+}
     errEl.textContent = '';
 
     var ms = durationUnit === 'hours' ? durationValue * 3600000 : durationValue * 60000;
 
-    function finishSave(imageData) {
-      if (editingId) {
-        var item = state.items.find(function (i) { return i.id === editingId; });
-        if (item) {
-          item.name = name; item.size = size; item.condition = condition;
-          item.description = description; item.increment = increment; item.color = color;
-          if (imageData !== undefined) item.image = imageData;
-          if (item.status === 'not_started') {
-            item.startPrice = startBid;
-            item.currentBid = startBid;
-            item.durationMs = ms;
-            showToast('"' + name + '" updated.');
-          } else {
-            showToast('"' + name + '" updated (starting bid & duration unchanged — already started).');
-          }
-        }
-      } else {
-        state.items.unshift({
-         id: crypto.randomUUID(),
-          name: name, size: size, condition: condition, description: description,
-          color: color, image: imageData || null,
-          startPrice: startBid, increment: increment, durationMs: ms,
-          status: 'not_started', startsAt: null, endsAt: null,
-          currentBid: startBid, bidderName: null, bidderPhone: null, paid: false
-        });
-        showToast('"' + name + '" added — Not Started. Launch it from the Auctions tab.');
-      }
-      save();
-      renderAll();
-      resetProductForm();
+    
+async function finishSave(imageData) {
+  if (editingId) {
+    var item = state.items.find(function (i) {
+      return i.id === editingId;
+    });
+
+    if (!item) {
+      showToast('Product not found. Please refresh and try again.');
+      return;
     }
 
+    // Preserve the original product until Supabase confirms the edit.
+    var originalDetails = {
+  name: item.name,
+  size: item.size,
+  condition: item.condition,
+  description: item.description,
+  color: item.color,
+  image: item.image,
+  startPrice: item.startPrice,
+  increment: item.increment,
+  durationMs: item.durationMs,
+  currentBid: item.currentBid
+};
+
+    // Update only the editable product details.
+    item.name = name;
+    item.size = size;
+    item.condition = condition;
+    item.description = description;
+    item.color = color;
+
+    // Auction settings can only be edited before an auction starts.
+if (item.status === 'not_started') {
+  item.startPrice = startBid;
+  item.increment = increment;
+  item.durationMs = ms;
+  item.currentBid = startBid;
+}
+
+    try {
+      await updateProductDetails(item);
+    } catch (error) {
+      // Restore the previous details if Supabase rejects the update.
+      Object.assign(item, originalDetails);
+
+      console.error('Product update failed:', error);
+      showToast('Product details could not be saved. Please try again.');
+      return;
+    }
+
+    showToast('Product details saved to Supabase.');
+
+  } else {
+    
+    // Create the product locally, but don't display it yet.
+    var newItem = {
+      id: crypto.randomUUID(),
+      name: name,
+      size: size,
+      condition: condition,
+      description: description,
+      color: color,
+      image: imageData || null,
+      startPrice: startBid,
+      increment: increment,
+      durationMs: ms,
+      status: 'not_started',
+      startsAt: null,
+      endsAt: null,
+      currentBid: startBid,
+      bidderName: null,
+      bidderPhone: null,
+      paid: false
+    };
+
+    try {
+      // Wait for Supabase to confirm the new product.
+      await createProduct(newItem);
+    } catch (error) {
+      console.error('Product creation failed:', error);
+      showToast('Product could not be created. Please try again.');
+      return;
+    }
+
+    // Only display the product after successful database creation.
+    state.items.unshift(newItem);
+
+    showToast('"' + name + '" added successfully.');
+  }
+
+
+  // Temporary local backup.
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (error) {
+    console.warn('Local backup failed:', error);
+  }
+
+  renderAll();
+  resetProductForm();
+}
+
+try {
    if (fileInput.files && fileInput.files[0]) {
   var file = fileInput.files[0];
   var filePath = 'products/' + crypto.randomUUID() + '-' + file.name;
@@ -909,27 +1730,42 @@ adminLogoutBtn.addEventListener('click', async function () {
       });
 
     if (uploadResult.error) {
-      console.error('Product image upload failed:', uploadResult.error);
-      errEl.textContent = 'Image upload failed. Please try again.';
-      return;
-    }
+  console.error('Product image upload failed:', uploadResult.error);
+  errEl.textContent = 'Image upload failed. Please try again.';
+
+  productSaveInProgress = false;
+  productSubmitBtn.disabled = false;
+  return;
+}
 
     var publicUrlResult = supabaseClient
       .storage
       .from('product images')
       .getPublicUrl(filePath);
 
-    finishSave(publicUrlResult.data.publicUrl);
+    await finishSave(publicUrlResult.data.publicUrl);
 
   } catch (error) {
     console.error('Product image upload error:', error);
-    errEl.textContent = 'Image upload failed: ' + uploadResult.error.message;
+    errEl.textContent = 'Image upload failed: ' + (error.message || 'Please try again.');
+
+    productSaveInProgress = false;
+productSubmitBtn.disabled = false;
   }
 
 } else {
-  finishSave(undefined);
+  await finishSave(undefined);
 }
-  });
+
+} catch (error) {
+  console.error('Unexpected product save error:', error);
+  errEl.textContent =
+    'Something went wrong while saving. Please try again.';
+} finally {
+  productSaveInProgress = false;
+  productSubmitBtn.disabled = false;
+}
+});
 
   function editProduct(item) {
     editingId = item.id;
@@ -958,25 +1794,46 @@ adminLogoutBtn.addEventListener('click', async function () {
     document.getElementById('panel-products').scrollIntoView({ behavior: 'smooth' });
   }
 
+var productDeletionInProgress = new Set();
+
   async function deleteProduct(item) {
+  if (productDeletionInProgress.has(item.id)) return;
+
   var msg = 'Delete "' + item.name + '"? This cannot be undone.';
 
-  if (item.status === 'active' && item.bidderName) {
-    msg = 'Delete "' + item.name + '"? It currently has a live bid from ' + item.bidderName + ' — deleting removes it entirely. This cannot be undone.';
+  if (item.status === 'active' && item.bidCount > 0) {
+    msg = 'Delete "' + item.name +
+      '"? This auction has bids. Deleting it cannot be undone.';
   }
 
   if (!confirm(msg)) return;
 
+  // Acquire the lock before any asynchronous operation.
+  productDeletionInProgress.add(item.id);
+
   try {
+    if (!(await checkAdminSession())) {
+      showToast('Admin MFA verification required.');
+      return;
+    }
+
     var result = await supabaseClient
       .from('products')
       .delete()
-      .eq('id', item.id);
+      .eq('id', item.id)
+      .select('id');
 
     if (result.error) {
-      console.error('Supabase product delete failed:', result.error);
-      showToast('Could not delete from the database.');
-      return;
+  if (result.error.code === '23503') {
+    showToast('This product cannot be deleted because it has bids.');
+    return;
+  }
+
+  throw result.error;
+}
+
+    if (!result.data || result.data.length !== 1) {
+      throw new Error('Product deletion was not confirmed.');
     }
 
     state.items = state.items.filter(function (i) {
@@ -986,44 +1843,133 @@ adminLogoutBtn.addEventListener('click', async function () {
     save();
     renderAll();
     showToast('"' + item.name + '" deleted.');
+
   } catch (error) {
-    console.error('Supabase delete error:', error);
-    showToast('Could not delete from the database.');
+    console.error('Product deletion failed:', error);
+    showToast('Could not delete the product. Refresh and try again.');
+
+  } finally {
+    // Always release the lock, including after MFA failure.
+    productDeletionInProgress.delete(item.id);
   }
 }
 
   // ---------- start auction(s) ----------
-  function startAuction(item) {
-    if (item.status !== 'not_started') return;
-    var now = Date.now();
+  async function startAuction(item) {
+  if (item.status !== 'not_started') return;
+
+  var now = Date.now();
+  var endsAt = now + (item.durationMs || DEFAULT_DURATION_MS);
+
+  try {
+    var result = await supabaseClient
+      .from('products')
+      .update({
+        status: 'active',
+        starts_at: new Date(now).toISOString(),
+        ends_at: new Date(endsAt).toISOString()
+      })
+      .eq('id', item.id)
+      .eq('status', 'not_started')
+      .select('id');
+
+    if (result.error) throw result.error;
+
+    if (!result.data || result.data.length !== 1) {
+      throw new Error('Auction was not started. Refresh and try again.');
+    }
+
     item.status = 'active';
     item.startsAt = now;
-    item.endsAt = now + (item.durationMs || DEFAULT_DURATION_MS);
+    item.endsAt = endsAt;
+
     save();
     renderAll();
     showToast('"' + item.name + '" is now live.');
+  } catch (error) {
+    console.error('Auction start failed:', error);
+    showToast('Could not start the auction. Please try again.');
+  }
+}
+
+  async function startAllAuctions() {
+  var pending = state.items.filter(function (i) {
+    return i.status === 'not_started';
+  });
+
+  if (!pending.length) {
+    showToast('No pending auctions to start.');
+    return;
   }
 
-  function startAllAuctions() {
-    var pending = state.items.filter(function (i) { return i.status === 'not_started'; });
-    if (!pending.length) { showToast('No pending auctions to start.'); return; }
-    var ok = confirm(
-      'Start all pending auctions?\n\n' +
-      'This will start ' + pending.length + ' auction(s) that are currently Not Started. ' +
-      'Each will begin now and run for its own configured duration (24h by default).'
-    );
-    if (!ok) return;
+  var ok = confirm(
+    'Start all pending auctions?\n\n' +
+    'This will start ' + pending.length + ' auction(s). ' +
+    'Each will run for its configured duration.'
+  );
+
+  if (!ok) return;
+
+  var started = 0;
+  var failed = 0;
+
+  for (var item of pending) {
     var now = Date.now();
-    pending.forEach(function (item) {
+    var endsAt = now + (item.durationMs || DEFAULT_DURATION_MS);
+
+    try {
+      var result = await supabaseClient
+        .from('products')
+        .update({
+          status: 'active',
+          starts_at: new Date(now).toISOString(),
+          ends_at: new Date(endsAt).toISOString()
+        })
+        .eq('id', item.id)
+        .eq('status', 'not_started')
+        .select('id');
+
+      if (result.error) throw result.error;
+
+      if (!result.data || result.data.length !== 1) {
+        throw new Error('Auction could not be started.');
+      }
+
       item.status = 'active';
       item.startsAt = now;
-      item.endsAt = now + (item.durationMs || DEFAULT_DURATION_MS);
-    });
-    save();
-    renderAll();
-    showToast('Started ' + pending.length + ' auction(s).');
+      item.endsAt = endsAt;
+      started++;
+    } catch (error) {
+      console.error('Failed to start auction:', item.name, error);
+      failed++;
+    }
   }
-  document.getElementById('startAllBtn').addEventListener('click', startAllAuctions);
+
+  save();
+  renderAll();
+
+  if (failed) {
+    showToast(
+      'Started ' + started + ' auction(s). ' +
+      failed + ' failed. Refresh before trying again.'
+    );
+  } else {
+    showToast('Started ' + started + ' auction(s).');
+  }
+}
+  var startAllBtn = document.getElementById('startAllBtn');
+
+startAllBtn.addEventListener('click', async function () {
+  if (startAllBtn.disabled) return;
+
+  startAllBtn.disabled = true;
+
+  try {
+    await startAllAuctions();
+  } finally {
+    startAllBtn.disabled = false;
+  }
+});
 
   // ---------- admin: products list ----------
   function renderAdminProductList() {
@@ -1087,7 +2033,19 @@ adminLogoutBtn.addEventListener('click', async function () {
         peso(item.startPrice) + ' starting · runs ' + fmtDuration(item.durationMs) + ' once started</span>';
       var btn = document.createElement('button');
       btn.className = 'mini-btn good'; btn.type = 'button'; btn.textContent = 'Start Auction';
-      btn.addEventListener('click', function () { startAuction(item); });
+      btn.addEventListener('click', async function () {
+  if (btn.disabled) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Starting...';
+
+  try {
+    await startAuction(item);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Start Auction';
+  }
+});
       row.appendChild(info);
       row.appendChild(btn);
       notStartedWrap.appendChild(row);
@@ -1132,22 +2090,90 @@ adminLogoutBtn.addEventListener('click', async function () {
       info.innerHTML = '<b>' + escapeHtml(item.name) + '</b><br><span class="meta">' +
         escapeHtml(item.bidderName) + ' · ' + escapeHtml(item.bidderPhone || '') + ' · ' + peso(item.currentBid) + '</span>';
       var btn = document.createElement('button');
-      btn.className = item.paid ? 'mini-btn good' : 'mini-btn';
-      btn.type = 'button';
-      btn.textContent = item.paid ? 'Payment received ✓' : 'Mark payment received';
-      btn.disabled = item.paid;
-      btn.addEventListener('click', function () {
-        item.paid = true;
-        save();
-        renderAll();
-        showToast('Marked "' + item.name + '" as paid.');
-      });
+      
+btn.className = item.paid ? 'mini-btn good' : 'mini-btn';
+btn.type = 'button';
+btn.textContent = item.paid
+  ? 'Mark as unpaid'
+  : 'Mark payment received';
+btn.disabled = false;
+
+      btn.addEventListener('click', async function () {
+  btn.disabled = true;
+
+  try {
+
+    if (!(await checkAdminSession())) {
+  throw new Error('Admin MFA verification required.');
+}
+    var result = await supabaseClient
+      .from('products')
+      
+.update({ paid: !item.paid })
+
+      .eq('id', item.id)
+      .eq('status', 'ended')
+      
+.eq('paid', item.paid)
+
+      .select('id');
+
+    if (result.error) throw result.error;
+
+    if (!result.data || result.data.length !== 1) {
+      throw new Error('Payment update was not confirmed.');
+    }
+
+    
+item.paid = !item.paid;
+
+    save();
+    renderAll();
+    
+showToast(
+  'Marked "' + item.name + '" as ' +
+  (item.paid ? 'paid.' : 'unpaid.')
+);
+
+  } catch (error) {
+    console.error('Payment update failed:', error);
+    btn.disabled = false;
+    showToast('Could not save payment confirmation. Refresh and try again.');
+  }
+});
       row.appendChild(info);
       row.appendChild(btn);
       wrap.appendChild(row);
     });
   }
 
+  var auctionExpiryCheckRunning = false;
+
+async function endExpiredAuctions() {
+  if (auctionExpiryCheckRunning) return;
+  auctionExpiryCheckRunning = true;
+
+  try {
+    // Auction finalization is handled securely by Supabase Cron.
+    // The browser only refreshes the auction data.
+
+    
+if (!(await checkAdminSession())) return;
+
+if (adminDashboard.classList.contains('open')) {
+  await loadAdminProducts();
+} else {
+  await load(true);
+  renderAll();
+}
+
+
+  } catch (error) {
+    console.error('Auction refresh failed:', error);
+  } finally {
+    auctionExpiryCheckRunning = false;
+  }
+}
   // ---------- one render loop drives storefront + all admin panels ----------
   function renderAll() {
     render();
@@ -1157,7 +2183,48 @@ adminLogoutBtn.addEventListener('click', async function () {
   }
 
   // ---------- clock ----------
-   await load();
-  renderAll();
-  setInterval(renderAll, 1000);
+   
+await load();
+renderAll();
+
+// Automatically refresh auction data when a product changes.
+supabaseClient
+  .channel('trahe-auction-live')
+  .on(
+    'postgres_changes',
+    {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'products'
+    },
+    async (payload) => {
+      console.log('Live auction update:', payload.new.id);
+
+      
+try {
+  if (
+    adminDashboard.classList.contains('open') &&
+    await checkAdminSession()
+  ) {
+    // Refresh admin data without losing payment details.
+    await loadAdminProducts();
+  } else {
+    // Refresh public auction information.
+    await load(true);
+    renderAll();
+  }
+} catch (error) {
+  console.error('Auction live refresh failed:', error);
+}
+
+    }
+  )
+  .subscribe((status) => {
+    console.log('Auction Realtime status:', status);
+  });
+
+setInterval(renderAll, 1000);
+setInterval(endExpiredAuctions, 30000);
 })();
+
+
