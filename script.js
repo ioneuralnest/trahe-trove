@@ -2133,49 +2133,93 @@ btn.textContent = item.paid
   : 'Mark payment received';
 btn.disabled = false;
 
-      btn.addEventListener('click', async function () {
+      
+btn.addEventListener('click', async function () {
+  if (btn.disabled) return;
+
+  var correctionReason = null;
+
+  // Reversing a confirmed payment requires an audit reason.
+  if (item.paid) {
+    correctionReason = window.prompt(
+      'Why are you changing this payment from PAID to UNPAID?\n\n' +
+      'Enter a reason of at least 10 characters:'
+    );
+
+    // Cancel means no change.
+    if (correctionReason === null) return;
+
+    correctionReason = correctionReason.trim();
+
+    if (correctionReason.length < 10) {
+      showToast('Correction reason must be at least 10 characters.');
+      return;
+    }
+
+    if (!window.confirm(
+      'Confirm payment correction for "' + item.name + '"?\n\n' +
+      'Reason: ' + correctionReason
+    )) {
+      return;
+    }
+  }
+
   btn.disabled = true;
 
   try {
-
     if (!(await checkAdminSession())) {
-  throw new Error('Admin MFA verification required.');
-}
-    var result = await supabaseClient
-      .from('products')
-      
-.update({ paid: !item.paid })
-
-      .eq('id', item.id)
-      .eq('status', 'ended')
-      
-.eq('paid', item.paid)
-
-      .select('id');
-
-    if (result.error) throw result.error;
-
-    if (!result.data || result.data.length !== 1) {
-      throw new Error('Payment update was not confirmed.');
+      throw new Error('Admin MFA verification required.');
     }
 
-    
-item.paid = !item.paid;
+    if (item.paid) {
+      // PAID -> UNPAID:
+      // Use the existing audited database function.
+      var correction = await supabaseClient.rpc(
+        'correct_payment_status',
+        {
+          p_product_id: item.id,
+          p_reason: correctionReason
+        }
+      );
 
-    save();
+      if (correction.error) throw correction.error;
+
+    } else {
+      // UNPAID -> PAID:
+      // Preserve the existing payment confirmation behavior.
+      var result = await supabaseClient
+        .from('products')
+        .update({ paid: true })
+        .eq('id', item.id)
+        .eq('status', 'ended')
+        .eq('paid', false)
+        .select('id');
+
+      if (result.error) throw result.error;
+
+      if (!result.data || result.data.length !== 1) {
+        throw new Error('Payment update was not confirmed.');
+      }
+    }
+
+    // Refresh from Supabase instead of assuming the update succeeded.
+    await load(true);
     renderAll();
-    
-showToast(
-  'Marked "' + item.name + '" as ' +
-  (item.paid ? 'paid.' : 'unpaid.')
-);
+
+    showToast(
+      'Payment status updated successfully for "' + item.name + '".'
+    );
 
   } catch (error) {
     console.error('Payment update failed:', error);
     btn.disabled = false;
-    showToast('Could not save payment confirmation. Refresh and try again.');
+
+    showToast(
+      'Could not update payment status. Check the Console for details.'
+    );
   }
 });
+
       row.appendChild(info);
       row.appendChild(btn);
       wrap.appendChild(row);
