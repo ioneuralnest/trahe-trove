@@ -178,7 +178,10 @@
     <h2 id="modalItemName">Item</h2>
     <p class="sub" id="modalItemSub">Size — note</p>
     <p class="sub">Current bid: <span id="modalCurrentBid" class="mono">₱0</span> · minimum next bid <span id="modalMinBid" class="mono">₱0</span></p>
-    <p class="sub">Bidding with your Facebook account. No name or payment number required.</p>
+    <label for="bidName">Your name</label>
+    <input id="bidName" type="text" placeholder="e.g. Marga R." autocomplete="name">
+    <label for="bidPhone">GCash / Maya number</label>
+    <input id="bidPhone" type="tel" placeholder="09XX XXX XXXX" autocomplete="tel">
     <label for="bidAmount">Your bid (₱)</label>
     <input id="bidAmount" type="number" inputmode="numeric">
     <div
