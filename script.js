@@ -775,29 +775,43 @@ tag.appendChild(btn);
   var overlay = document.getElementById('bidOverlay');
   var activeItemId = null;
 
-  // Verify the current user against Supabase Auth, not just a cached session.
-  async function getFacebookBidder() {
-    var result = await supabaseClient.auth.getUser();
-    if (result.error || !result.data || !result.data.user) return null;
-    var user = result.data.user;
-    if (!(user.identities || []).some(function (identity) {
-      return identity.provider === 'facebook';
-    })) return null;
-    return user;
+  async function openBidModal(id) {
+    // Require Facebook login before allowing a customer to bid.
+  var identityResult =
+    await supabaseClient.auth.getUserIdentities();
+
+  if (identityResult.error) {
+    console.error(
+      'Could not check Facebook login:',
+      identityResult.error
+    );
+
+    showToast(
+      'Please continue with Facebook before placing a bid.'
+    );
+    return;
   }
 
-  async function openBidModal(id) {
-    var item = state.items.find(function (i) { return i.id === id; });
-    if (!item || item.status !== 'active') return;
+  var facebookIdentity =
+    (identityResult.data.identities || []).find(function (identity) {
+      return identity.provider === 'facebook';
+    });
 
-    var bidder = await getFacebookBidder();
-    if (!bidder) {
-      showToast('Log in with Facebook to place a bid.');
-      if (facebookLoginBtn) facebookLoginBtn.focus();
-      return;
-    }
+  if (!facebookIdentity) {
+    showToast(
+      'Please continue with Facebook before placing a bid.'
+    );
+    return;
+  }
 
-    activeItemId = id;
+  var item = state.items.find(function (i) {
+    return i.id === id;
+  });
+
+  if (!item || item.status !== 'active') return;
+
+  activeItemId = id;
+   
     document.getElementById('modalItemName').textContent = item.name;
     document.getElementById('modalItemSub').textContent = 'Size ' + item.size + ' — ' + item.description;
     document.getElementById('modalCurrentBid').textContent = peso(item.currentBid);
@@ -807,7 +821,10 @@ tag.appendChild(btn);
     document.getElementById('bidAmount').min = minNext;
     document.getElementById('modalErr').textContent = '';
     overlay.classList.add('open');
-    if (window.turnstile) window.turnstile.reset();
+
+  if (window.turnstile) {
+  window.turnstile.reset();
+}
   }
   function closeBidModal() { overlay.classList.remove('open'); activeItemId = null; }
 
@@ -821,13 +838,6 @@ tag.appendChild(btn);
 
   if (!item) {
     console.error('No active auction item.');
-    return;
-  }
-
-  // Check again immediately before submission; the session may have expired.
-  if (!(await getFacebookBidder())) {
-    document.getElementById('modalErr').textContent =
-      'Your Facebook session has expired. Please log in again.';
     return;
   }
 
