@@ -171,29 +171,47 @@
   <button class="admin-link" id="openAdminLogin">Admin Login</button>
 </footer>
 
+
 <!-- bid modal -->
 <div class="overlay" id="bidOverlay">
   <div class="modal">
-    <button class="close-x" id="closeModal" aria-label="Close">✕</button>
+    <button class="close-x" id="closeModal"
+            type="button" aria-label="Close">✕</button>
+
     <h2 id="modalItemName">Item</h2>
     <p class="sub" id="modalItemSub">Size — note</p>
-    <p class="sub">Current bid: <span id="modalCurrentBid" class="mono">₱0</span> · minimum next bid <span id="modalMinBid" class="mono">₱0</span></p>
-    <label for="bidName">Your name</label>
-    <input id="bidName" type="text" placeholder="e.g. Marga R." autocomplete="name">
-    <label for="bidPhone">GCash / Maya number</label>
-    <input id="bidPhone" type="tel" placeholder="09XX XXX XXXX" autocomplete="tel">
+
+    <p class="sub">
+      Current bid:
+      <span id="modalCurrentBid" class="mono">₱0</span>
+      · minimum next bid
+      <span id="modalMinBid" class="mono">₱0</span>
+    </p>
+
     <label for="bidAmount">Your bid (₱)</label>
-    <input id="bidAmount" type="number" inputmode="numeric">
+    <input
+      id="bidAmount"
+      type="number"
+      inputmode="numeric"
+      min="1"
+      step="1"
+      required
+    >
+
+    <!-- Existing Cloudflare Turnstile -->
     <div
-  class="cf-turnstile"
-  data-sitekey="0x4AAAAAAFIidZ3UTf64Iqqa"
-></div>
-    <div class="err" id="modalErr"></div>
-    <button class="submit" id="submitBid">
-  Submit Bid
-</button>
+      class="cf-turnstile"
+      data-sitekey="0x4AAAAAAFIidZ3UTf64Iqqa">
+    </div>
+
+    <div class="err" id="modalErr" role="alert"></div>
+
+    <button class="submit" id="submitBid" type="button">
+      Submit Bid
+    </button>
   </div>
 </div>
+
 
 <!-- admin login screen -->
 <div class="admin-screen" id="adminLoginScreen">
